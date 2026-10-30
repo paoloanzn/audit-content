@@ -61,6 +61,7 @@ PREFIX = "audit-content-"
 HERE = Path(__file__).resolve().parent
 KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE = "audit-content", "audit-content-claude-oauth"
 ANTHROPIC_HOST = "api.anthropic.com"
+LLM_PATHS = {"/v1/messages", "/v1/messages/count_tokens"}
 LEVELS = ("SAFE", "SUSPICIOUS", "MALICIOUS")
 SPECIALISTS = ("web", "scripts", "files", "infra")
 EXIT = {"SAFE": 0, "SUSPICIOUS": 1, "MALICIOUS": 2}
@@ -292,7 +293,7 @@ class EgressProxy:
 
     browse  Chromium's proxy: HTTP + CONNECT to public addresses only.
     tools   Same policy for curl/git/urllib run by the triage code and the agents.
-    llm     Plain HTTP from the agents' CLI; only POST /<nonce>/v1/messages*, forwarded over TLS to
+    llm     Plain HTTP from the agents' CLI; only POST /<nonce>/v1/messages (+ /count_tokens), forwarded over TLS to
             api.anthropic.com with the real OAuth token swapped in.
     """
 
@@ -500,7 +501,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         prefix = f"/{proxy.nonce}"
         flow = proxy.open_flow("llm", self.command, ANTHROPIC_HOST, 443)
-        if self.command != "POST" or not path.startswith(prefix + "/v1/messages"):
+        # Exact paths, not a prefix: "/v1/messages/../.." must not reach the rest of the API.
+        if self.command != "POST" or not path.startswith(prefix) or path[len(prefix):] not in LLM_PATHS:
             flow.block("not an allowed LLM route")
             return self.deny(403, "not an allowed LLM route")
         length = int(self.headers.get("Content-Length") or 0)
