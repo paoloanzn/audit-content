@@ -1,9 +1,8 @@
 # audit-content
 
-Check a link or a file before you open it. audit-content opens it inside a throwaway virtual machine on your Mac, lets four AI analysts and a set of classic malware scanners pick it apart, and gives you a verdict in one to two minutes: SAFE, SUSPICIOUS, or MALICIOUS. If you want, it also gives you a safe view of the content: pictures of the page, its text, and documents turned into plain images, so you can see what is there without ever opening it yourself.
+Check a link or a file before you open it. `audit-content` opens it inside a throwaway locked down virtual machine on your Mac, lets four AI agents and a set of classic malware scanners pick it apart, and gives you a verdict in one to two minutes: `SAFE`, `SUSPICIOUS`, or `MALICIOUS`. Optionally, it also gives you a safe view of the content: pictures of the page, its text, and documents turned into plain images, so you can see what is there without ever opening it yourself.
 
-> [!NOTE]
-> It is made for people whose laptop is worth attacking, such as anyone with access to production systems, cloud accounts, company finances, or crypto wallets. Many breaches start with one click: a fake login page, a "verify you are human" page that quietly puts a command on your clipboard, or a "coding test" from a recruiter that runs code the moment you open the folder in your editor.
+It is made for people who have sensitive credentials or critical infrastructure access on their machine, such as anyone with access to production systems, cloud accounts, company finances, or crypto wallets. Many breaches start with one click: a fake login page, a "verify you are human" page that quietly puts a command on your clipboard, or a "coding test" from a recruiter that runs code the moment you open the folder in your editor.
 
 ## Install or update
 
@@ -13,7 +12,7 @@ audit-content setup
 audit-content auth
 ```
 
-The first line puts the program in `/usr/local/share/audit-content` and the `audit-content` command in `/usr/local/bin`, so it asks for your password once. Run it again to update; it tells you when the sandbox changed and the image needs `audit-content setup --rebuild`. Set `PREFIX=/custom/path` before `sh` to install somewhere else.
+The program is installed in `/usr/local/share/audit-content` by default, you can set `PREFIX=/custom/path` before `sh` to install somewhere else. Run it again to update the tool; it tells you when the sandbox changed and the image needs `audit-content setup --rebuild`. 
 
 You need a Mac with Apple silicon and macOS 26 or later, Claude Code with a Claude subscription, and Python 3.9 or later (the one that ships with macOS is fine; nothing else is installed). `setup` installs Apple's [container](https://github.com/apple/container) tool if it is missing, and only after checking that the download matches the published checksum and is signed and notarized by Apple. It then builds the sandbox image once, which takes about eight minutes and uses about 2.7 GB of disk. `auth` runs `claude setup-token` for you, checks the token with Claude, and keeps it in the macOS Keychain. The token never enters the sandbox.
 
