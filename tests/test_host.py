@@ -213,9 +213,11 @@ class ScheduleTest(unittest.TestCase):
             ["http://192.0.2.7/", "https://a.example/"], 0))  # warning signs skip triage and go first
         self.assertEqual(list(self.home.glob("report-*")), [])  # reports of clean checks are deleted
         self.assertEqual(self.run_once(leads), ([], [], 0))
+        self.assertEqual(self.run_once(leads), ([], [], 0))
         files = ac.ScheduleFiles.for_user()
         state = ac.load_state(files)
         self.assertEqual(sorted(x["outcome"] for x in state["seen"].values()), ["SAFE", "SAFE", "skipped"])
+        self.assertEqual(len(state["runs"]), 2)  # the same news twice is kept once
         self.assertEqual(oct(files.state.stat().st_mode & 0o777), "0o600")
 
     def test_checks_per_run_are_capped_and_the_rest_waits_without_a_second_triage(self) -> None:
@@ -232,22 +234,26 @@ class ScheduleTest(unittest.TestCase):
 
     def test_helper_app_is_kept_when_unchanged_and_off_removes_everything(self) -> None:
         files = ac.ScheduleFiles.for_user()
-        self.assertTrue(ac.build_helper(files.helper, "exec /usr/bin/true"))
-        self.assertFalse(ac.build_helper(files.helper, "exec /usr/bin/true"))  # its Full Disk Access grant survives
+        self.assertTrue(ac.build_helper(files.helper, "exit 3"))
+        self.assertFalse(ac.build_helper(files.helper, "exit 3"))  # its Full Disk Access grant survives
         info = plistlib.loads((files.helper / "Contents" / "Info.plist").read_bytes())
         self.assertEqual((info["CFBundleIdentifier"], info["LSUIElement"]), (ac.SCHEDULE_LABEL, True))
         self.assertIn("runtime", subprocess.run(["codesign", "-dv", str(files.helper)], capture_output=True,
                                                 text=True).stderr)  # no library injection into the helper
         job = ac.agent_definition(files.helper)
-        self.assertTrue(Path(job["ProgramArguments"][0]).is_file())
+        # A failed run ends the app, instead of leaving an error dialog open that makes launchd skip later times.
+        self.assertEqual(subprocess.run(job["ProgramArguments"], timeout=30).returncode, 0)
+        # Launching it registered it with Launch Services, by its real path (/var is a link to /private/var).
+        self.addCleanup(subprocess.run, [ac.LSREGISTER, "-u", str(files.helper.resolve())])
         ac.save_state(files, {"seen": {}})
         files.agent.parent.mkdir(parents=True)
         files.agent.write_bytes(plistlib.dumps(job))
-        with mock.patch.object(ac, "run", return_value=(0, "")) as run:  # launchctl and tccutil: not for real
+        with mock.patch.object(ac, "run", return_value=(0, "")) as run:  # launchctl, tccutil, lsregister: not for real
             self.assertTrue(ac.schedule_off())
             self.assertFalse(ac.schedule_off())
         self.assertFalse(files.folder.exists() or files.agent.exists())
-        self.assertEqual([c.args[0][:2] for c in run.call_args_list], [["launchctl", "bootout"], ["tccutil", "reset"]])
+        self.assertEqual([c.args[0][:2] for c in run.call_args_list],
+                         [["launchctl", "bootout"], ["tccutil", "reset"], [ac.LSREGISTER, "-u"]])
 
 
 class InstallerTest(unittest.TestCase):

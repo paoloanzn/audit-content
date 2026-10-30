@@ -1384,7 +1384,13 @@ VM_MEMORY = 4 << 30  # what that VM may use: a check starts only when this much 
 RETRY_SECONDS = 600  # while memory is short, look again this often, until shortly before the next slot
 LOOKBACK, MAX_LOOKBACK = timedelta(hours=24), timedelta(days=3)
 MAX_TRIAGE, MAX_CHECKS = 60, 8  # per run, most recent and unread first; the rest waits for the next run
-HELPER_COMMAND = "AuditContentCommand"  # Info.plist key holding what the helper runs
+HELPER_NAME = "audit-content scheduled check"  # as Full Disk Access and Login Items list the helper app
+HELPER_SCRIPT = "AuditContentScript"  # Info.plist key holding what the helper runs
+LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+ACCESS_STEPS = (f"Scheduled checks read Mail and Telegram through a helper app, “{HELPER_NAME}”, and macOS allows "
+                "that only with Full Disk Access. System Settings opens at Privacy & Security > Full Disk Access: "
+                f"turn on the switch next to “{HELPER_NAME}” and confirm with your password or Touch ID. If it is "
+                "not in the list, drag it there from the Finder window that opens.")
 DOMAINS_FILE = HERE / "known-domains.txt"
 SKIPPED_MAILBOXES = {"junk", "trash", "sent", "drafts"}
 RISKY_FILES = frozenset(  # can run code, install software, or show a fake page as soon as they are opened
@@ -1423,7 +1429,7 @@ class ScheduleFiles:
 
     @property
     def helper(self) -> Path:
-        return self.folder / "audit-content scheduled check.app"
+        return self.folder / f"{HELPER_NAME}.app"
 
     @property
     def state(self) -> Path:
@@ -1829,8 +1835,7 @@ def scheduled_run(background: bool, dry_run: bool) -> int:
                 state["access_alerted"] = time.time()
                 save_state(files, state)
                 if context_menu.alert("audit-content cannot read Mail and Telegram in the background",
-                                      f"Turn on “{files.helper.stem}” under System Settings > Privacy & Security > "
-                                      "Full Disk Access. Until then, scheduled checks find nothing.",
+                                      f"{ACCESS_STEPS}\n\nUntil then, scheduled checks find nothing.",
                                       context_menu.CAUTION, "Open Settings", "Later"):
                     open_access_settings(files)
             else:
@@ -1921,15 +1926,17 @@ def build_helper(app: Path, command: str) -> bool:
     """Create the helper app that runs `command`. An identical existing one is kept, with its Full Disk
     Access grant: macOS ties the grant to the app's signature, which any rebuild changes. Returns whether
     it was (re)built."""
+    # `try`: an app shows an uncaught error in a dialog and stays open until someone closes it, and while
+    # it is open launchd skips every later time. A failed run is recorded in the state instead.
+    script = 'try\ndo shell script "' + command.replace("\\", "\\\\").replace('"', '\\"') + '"\nend try'
     try:
-        if plistlib.loads((app / "Contents" / "Info.plist").read_bytes()).get(HELPER_COMMAND) == command:
+        if plistlib.loads((app / "Contents" / "Info.plist").read_bytes()).get(HELPER_SCRIPT) == script:
             return False
     except Exception:  # missing, unreadable, or not a property list: plistlib raises several types
         pass
     app.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(dir=app.parent) as tmp:  # same volume, so the final rename is atomic
         staged = Path(tmp) / app.name
-        script = 'do shell script "' + command.replace("\\", "\\\\").replace('"', '\\"') + '"'
         rc, out = run(["/usr/bin/osacompile", "-o", str(staged), "-e", script], timeout=60)
         if rc != 0:
             die(f"could not create the helper app: {out.strip()[:300]}")
@@ -1938,7 +1945,7 @@ def build_helper(app: Path, command: str) -> bool:
         # An agent app (no Dock icon) with its own identity, signed with the hardened runtime so that no
         # library can be injected into the process that holds Full Disk Access.
         info.update({"CFBundleIdentifier": SCHEDULE_LABEL, "CFBundleName": app.stem, "LSUIElement": True,
-                     HELPER_COMMAND: command})
+                     HELPER_SCRIPT: script})
         info_path.write_bytes(plistlib.dumps(info))
         rc, out = run(["/usr/bin/codesign", "--force", "--options", "runtime", "--sign", "-", str(staged)], timeout=60)
         if rc != 0:
@@ -1960,8 +1967,8 @@ def agent_definition(helper: Path) -> Dict[str, object]:
 def open_access_settings(files: ScheduleFiles) -> None:
     import mail
 
-    run(["/usr/bin/open", mail.FULL_DISK_ACCESS_SETTINGS], timeout=30)
     run(["/usr/bin/open", "-R", str(files.helper)], timeout=30)  # in Finder, ready to drag into the list
+    run(["/usr/bin/open", mail.FULL_DISK_ACCESS_SETTINGS], timeout=30)  # after Finder, so that it is in front
 
 
 def cmd_schedule_on() -> int:
@@ -1975,7 +1982,11 @@ def cmd_schedule_on() -> int:
     files = ScheduleFiles.for_user()
     command = (f"exec {shlex.quote(context_menu.interpreter())} -E -s -B {shlex.quote(str(Path(__file__).resolve()))} "
                "schedule run --background >/dev/null 2>&1")
-    build_helper(files.helper, command)
+    existed = files.helper.exists()
+    if build_helper(files.helper, command) and existed:
+        # The old app's Full Disk Access entry would still look switched on, yet no longer match the new
+        # app's signature: remove it, so that the new app is listed afresh.
+        run(["tccutil", "reset", "SystemPolicyAllFiles", SCHEDULE_LABEL], timeout=30)
     job = f"gui/{os.getuid()}/{SCHEDULE_LABEL}"
     run(["launchctl", "bootout", job], timeout=30)
     files.agent.parent.mkdir(parents=True, exist_ok=True)
@@ -1985,12 +1996,12 @@ def cmd_schedule_on() -> int:
         die(f"launchd did not accept the schedule: {out.strip()[:300]}")
     print(f"Scheduled checks are on: at {', '.join(f'{h:02d}:00' for h in SCHEDULE_HOURS)}, while this Mac is awake "
           "(a time missed during sleep runs on wake).")
-    told = False
+    guided = False
     give_up = time.monotonic() + 600
     try:
         while True:
             # Start a run now and wait for it to say whether the helper app can read Mail and Telegram. While
-            # this terminal explains what to do, the run does not show its own alert about it.
+            # this command guides the user, the run does not show its own alert about it.
             save_state(files, {**load_state(files), "access_alerted": time.time()})
             started = time.time()
             run(["launchctl", "kickstart", "-k", job], timeout=30)
@@ -2006,15 +2017,23 @@ def cmd_schedule_on() -> int:
             if not access.get("problem"):
                 print("The helper app can read Mail and Telegram. The first run has started; "
                       "`audit-content schedule status` shows what it found.")
+                if guided:  # the user is looking at System Settings, not at this terminal
+                    context_menu.alert("audit-content can now read Mail and Telegram", "Scheduled checks are set "
+                                       "up, and the first one has started. You can close System Settings.",
+                                       context_menu.NOTE)
                 return 0
-            if not told:
-                told = True
-                print(f"\nOne more step: the helper app “{files.helper.stem}” needs Full Disk Access to read "
-                      "Mail and Telegram while you are away. In System Settings > Privacy & Security > Full Disk "
-                      "Access (opening now), drag it from the Finder window into the list, or click + and choose it, "
-                      "then make sure it is turned on.\nWaiting for access (Ctrl-C stops waiting; the schedule stays "
-                      "on)...")
+            if not guided:
+                # The run that was refused access has put the helper app in the Full Disk Access list, switched off.
+                guided = True
+                print(f"\nOne more step. {ACCESS_STEPS}")
+                if not context_menu.alert("Allow audit-content to read Mail and Telegram",
+                                          f"{ACCESS_STEPS}\n\naudit-content notices by itself when it is done.",
+                                          context_menu.NOTE, "Open Settings", "Later"):
+                    print("Run `audit-content schedule on` again to finish. Until then, scheduled checks find nothing.")
+                    return 0
                 open_access_settings(files)
+                print("Waiting for access (Ctrl-C stops waiting; the schedule stays on)...")
+                give_up = time.monotonic() + 600
             if time.monotonic() > give_up:
                 print("Still no access. Scheduled checks find nothing until the helper app has Full Disk Access.")
                 return 1
@@ -2032,8 +2051,9 @@ def schedule_off() -> bool:
     if files.agent.exists():
         run(["launchctl", "bootout", f"gui/{os.getuid()}/{SCHEDULE_LABEL}"], timeout=30)
         files.agent.unlink()
-    if files.helper.exists():
+    if files.helper.exists():  # tccutil finds the app by its bundle identifier only while Launch Services has it
         run(["tccutil", "reset", "SystemPolicyAllFiles", SCHEDULE_LABEL], timeout=30)
+        run([LSREGISTER, "-u", str(files.helper)], timeout=30)
     shutil.rmtree(files.folder, ignore_errors=True)
     return found
 
