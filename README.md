@@ -2,7 +2,8 @@
 
 Check a link or a file before you open it. audit-content opens it inside a throwaway virtual machine on your Mac, lets four AI analysts and a set of classic malware scanners pick it apart, and gives you a verdict in one to two minutes: SAFE, SUSPICIOUS, or MALICIOUS. If you want, it also gives you a safe view of the content: pictures of the page, its text, and documents turned into plain images, so you can see what is there without ever opening it yourself.
 
-It is made for people whose laptop is worth attacking, such as anyone with access to production systems, cloud accounts, company finances, or crypto wallets. Many breaches start with one click: a fake login page, a "verify you are human" page that quietly puts a command on your clipboard, or a "coding test" from a recruiter that runs code the moment you open the folder in your editor.
+> [!NOTE]
+> It is made for people whose laptop is worth attacking, such as anyone with access to production systems, cloud accounts, company finances, or crypto wallets. Many breaches start with one click: a fake login page, a "verify you are human" page that quietly puts a command on your clipboard, or a "coding test" from a recruiter that runs code the moment you open the folder in your editor.
 
 ## Install or update
 
