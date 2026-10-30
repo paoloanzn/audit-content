@@ -1,0 +1,6 @@
+# editor and tool leftovers
+*.swp
+*.swo
+.DS_Store
+__pycache__/
+.mypy_cache/
