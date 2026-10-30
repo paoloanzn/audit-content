@@ -25,7 +25,7 @@ audit-content https://example.com/invoice
 audit-content --file ~/Downloads/offer-letter.zip --open
 ```
 
-Pass a link, or a file with `--file` (an email attachment, an archive, a document, a saved web page). `--report` writes the safe-view report as a single HTML file in the temporary folder, `--open` also opens it in your browser, and `--json` prints the verdict for other tools. The exit code is 0 for SAFE, 1 for SUSPICIOUS, 2 for MALICIOUS, and 3 if the tool itself failed. `clean` removes leftovers of an interrupted check, and `uninstall` removes the image, the stored token, the right-click entries, the program, and the `audit-content` command.
+Pass a link, or a file with `--file` (an email attachment, an archive, a document, a saved web page). `--report` writes the safe-view report as a single HTML file in the temporary folder, `--open` also opens it in your browser, and `--json` prints the verdict for other tools. The exit code is 0 for SAFE, 1 for SUSPICIOUS, 2 for MALICIOUS, and 3 if the tool itself failed. `clean` removes leftovers of an interrupted check, and `uninstall` removes the image, the stored token, the right-click entries, the scheduled checks, the program, and the `audit-content` command.
 
 ![Terminal output of a check](docs/terminal.png)
 
@@ -42,6 +42,27 @@ To check a file, right-click it in Finder and choose Check File with audit-conte
 The check runs in the background while macOS shows a spinning gear in the menu bar, which you can click to stop it. The verdict then appears in a window, with a button that opens the report. Below, the file was the EICAR test file, which is harmless but built so that every antivirus flags it.
 
 <img src="docs/verdict-alert.png" width="372" alt="The verdict window for the EICAR test file: MALICIOUS">
+
+### Scheduled checks of Telegram and Mail (experimental)
+
+audit-content can also look through new messages in Telegram for macOS and Apple Mail on its own, five times a day, and warn you about a malicious link or attachment before you open it.
+
+```sh
+audit-content schedule on       # turn it on (once)
+audit-content schedule status   # what the last runs found
+audit-content schedule run --dry-run   # what a run would check now, without checking it
+audit-content schedule off      # turn it off and remove everything it added
+```
+
+A run starts at 02:00, 07:00, 12:00, 17:00 and 22:00. If the Mac is asleep then, the run happens once when it wakes. Each run reads the incoming messages that arrived since the previous run, going back at least 24 hours, and unread ones come first. In Mail it skips Junk, Trash, Sent and Drafts. It narrows the links and files down in three steps, so that only a few are checked:
+
+1. Links to well-known sites are dropped, as are pictures, audio, video and plain-text files. The well-known sites are listed in `known-domains.txt`: the 10,000 most visited sites in Google's Chrome UX Report, plus well-known domains that list misses. Link shorteners, free website hosting, file sharing and online forms never count as well-known, because anyone can publish there.
+2. Links and files with clear warning signs go straight to a check: a link to a bare IP address, a domain with look-alike letters, a link with an `@` that hides its real domain, a download of a program or an installer, or a file that runs code or shows a web page when opened.
+3. Everything else goes to Claude's fastest model in a single request, which picks what deserves a check. It skips only what is clearly harmless, such as a newsletter's links. It runs with every tool turned off and a throwaway settings folder, so it never touches your own Claude Code setup.
+
+The checks run one at a time in a smaller virtual machine, with 2 processor cores and 4 GB of memory, at most eight per run; the rest wait for the next run. A check starts only when 4 GB of memory is free and macOS reports no memory pressure. Otherwise the run looks again every ten minutes and gives up ten minutes before the next one is due, so delayed runs never pile up. Each link and file is remembered by a fingerprint, so it is never checked twice. Only a MALICIOUS verdict interrupts you, with a window that names where the link or file came from and a button that opens the report. `schedule status` lists everything else.
+
+macOS lets background jobs read Mail and Telegram only with Full Disk Access. `schedule on` therefore creates a small helper app, "audit-content scheduled check", which runs only this check. It then opens System Settings so that you can turn Full Disk Access on for that app alone: Terminal and Python get nothing new. The helper app and a small record of what was already checked are kept in `~/Library/Application Support/audit-content`, and the schedule itself in `~/Library/LaunchAgents`. `schedule off` and `uninstall` remove all of them.
 
 ## The report
 
@@ -87,6 +108,6 @@ With `--upstream-proxy`, the same checks run first, and the proxy then asks the 
 
 Everything that comes back from the virtual machine is treated as hostile. Text is cleaned before it reaches your terminal, and images are checked before they go into the report.
 
-Nothing is left behind. Each check's machine, memory, and network are deleted when it ends, even if audit-content is killed. The only thing that stays on disk is the image, and rebuilding it replaces the old one instead of adding to it.
+Nothing is left behind. Each check's machine, memory, and network are deleted when it ends, even if audit-content is killed. The only thing that stays on disk is the image, and rebuilding it replaces the old one instead of adding to it. Scheduled checks, when you turn them on, add only the helper app, their schedule, and the record of what they already checked, described above.
 
 The sandbox opens links from your own internet connection, so the site sees your address. To keep it hidden, pass a proxy you trust with `--upstream-proxy http://host:port`.

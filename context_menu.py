@@ -244,7 +244,7 @@ def links_in(text: str) -> List[str]:
     return list(dict.fromkeys(found))[:MAX_TARGETS]
 
 
-_child: Optional["subprocess.Popen[bytes]"] = None  # the running check, for _stop
+_child: Optional["subprocess.Popen[bytes]"] = None  # the running check, for stop
 
 
 def run_check(args: List[str], label: str) -> Outcome:
@@ -271,8 +271,8 @@ def run_check(args: List[str], label: str) -> Outcome:
                    Path(report) if isinstance(report, str) and report else None, code)
 
 
-def _stop(signum: int, frame: Optional[FrameType]) -> None:
-    """The gear in the menu bar was clicked: let audit-content clean up its VM, and show nothing."""
+def stop(signum: int, frame: Optional[FrameType]) -> None:
+    """SIGTERM, from the gear in the menu bar or from launchd: let audit-content clean up its VM, and show nothing."""
     if _child is not None and _child.poll() is None:
         _child.terminate()
     raise SystemExit(130)
@@ -306,7 +306,7 @@ def check(kind: str, items: Sequence[str]) -> int:
     if not targets:
         alert("audit-content found nothing to check", "The selection does not contain a link.", CAUTION)
         return 1
-    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGTERM, stop)
     worst = 0
     for args, label in targets:
         outcome = run_check(args, label)
