@@ -11,13 +11,16 @@ from __future__ import annotations
 import http.client
 import importlib.util
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location("audit_content", ROOT / "audit-content.py")
@@ -129,6 +132,130 @@ class TargetTest(unittest.TestCase):
             self.assertEqual(target.url, want)
 
 
+class ScheduleTest(unittest.TestCase):
+    """Scheduled checks against the real domain list, state file, helper app and memory readings. Mail,
+    Telegram, Claude and the VM are replaced, and HOME is a temp folder, so the real schedule is never touched."""
+
+    def setUp(self) -> None:
+        self.home = Path(tempfile.mkdtemp(prefix="audit-content-test-"))
+        patcher = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(shutil.rmtree, self.home)
+
+    def test_what_is_worth_a_check(self) -> None:
+        for url in ("https://docs.github.com/en/actions", "https://twitter.com/x/status/1", "https://www.wikipedia.org/",
+                    "https://maps.app.goo.gl/abc", "https://www.irs.gov/forms"):  # known sites
+            self.assertIsNone(ac.link_flags(url), url)
+        self.assertIsNone(ac.link_flags("https://www.google.com/url?q=https://en.wikipedia.org/wiki/Mail"))
+        for url in ("https://sites.google.com/view/payroll", "https://someone.github.io/claim", "https://goo.gl/abc",
+                    "https://www.google.com/url?q=https://evil.example/"):  # anyone can publish there, or unknown
+            self.assertEqual(ac.link_flags(url), (), url)
+        for url, sign in (("http://192.0.2.7/login", "bare IP address"), ("https://xn--pple-43d.com/", "look-alike"),
+                          ("https://аpple.com/", "look-alike"), ("https://github.com@evil.example/", "'@'"),
+                          ("https://github.com/a/b/releases/download/v1/Setup.dmg", ".dmg file")):
+            self.assertIn(sign, " ".join(ac.link_flags(url) or ("none",)), url)
+        files = [("photo.jpg", "k1", None, None), ("invoice.pdf", "k2", None, None), ("invoice.pdf.html", "k3", None, None)]
+        leads = ac.message_leads(["https://evil.example/a", "https://evil.example/b", "mailto:x@y.example",
+                                  "en.wikipedia.org/wiki/Mail", "www.unknown-shop.example/x"], files,
+                                 "Mail, me@x.example", "s", datetime(2026, 1, 1), True, "subject")
+        self.assertEqual([(x.kind, x.target, bool(x.flags)) for x in leads], [  # one link per site
+            ("link", "https://evil.example/a", False), ("link", "https://www.unknown-shop.example/x", False),
+            ("file", "invoice.pdf", False), ("file", "invoice.pdf.html", True)])
+
+    def test_memory_readings_match_macos(self) -> None:
+        for name in ("hw.memsize", "kern.memorystatus_vm_pressure_level"):
+            out = subprocess.run(["sysctl", "-n", name], capture_output=True, text=True).stdout
+            self.assertEqual(ac.sysctl(name), int(out), name)
+        self.assertIn(ac.memory_problem() is None or "memory" in ac.memory_problem(), (True,))
+
+    def test_a_run_waiting_for_memory_stops_before_the_next_slot(self) -> None:
+        with mock.patch.object(ac, "memory_problem", return_value="busy"), \
+                mock.patch.object(ac, "RETRY_SECONDS", 0.2), mock.patch.object(ac.time, "sleep", wraps=ac.time.sleep) as sleep:
+            self.assertFalse(ac.wait_for_memory(datetime.now().astimezone() + timedelta(seconds=0.5)))
+        self.assertEqual(sleep.call_count, 2)  # a third look would pass the deadline: the run ends instead
+
+    def lead(self, target: str, unread: bool = True, minutes: int = 0) -> Any:
+        return ac.Lead("link", target, ac.lead_key(target), "Telegram, group “g”", "sender",
+                       datetime(2026, 10, 30, 12, 0) - timedelta(minutes=minutes), unread, "text",
+                       ac.link_flags(target) or ())
+
+    def run_once(self, leads: List[Any], skip: Tuple[str, ...] = (), verdict: str = "SAFE"
+                 ) -> Tuple[List[str], List[str], int]:
+        """A background run over `leads`: what Claude was asked about, what was checked, and how many alerts."""
+        asked: List[str] = []
+        checked: List[str] = []
+
+        def triage(ask: List[Any], token: str) -> Optional[Dict[int, Tuple[bool, str]]]:
+            asked.extend(x.target for x in ask)
+            return {i: (x.target not in skip, "") for i, x in enumerate(ask)}
+
+        def check(lead: Any) -> Any:
+            checked.append(lead.target)
+            report = self.home / f"report-{len(checked)}.html"
+            report.write_text("report")
+            return ac.context_menu.Outcome(verdict, lead.label, ("reason",), report, 0)
+
+        with mock.patch.object(ac, "gather", return_value=(leads, [], None)), \
+                mock.patch.object(ac, "triage", side_effect=triage), \
+                mock.patch.object(ac, "check_lead", side_effect=check), \
+                mock.patch.object(ac, "keychain_get", return_value="token"), \
+                mock.patch.object(ac, "memory_problem", return_value=None), \
+                mock.patch.object(ac.context_menu, "alert", return_value=False) as alert:
+            self.assertEqual(ac.scheduled_run(True, False), 0)
+        return asked, checked, alert.call_count
+
+    def test_each_link_is_triaged_and_checked_once(self) -> None:
+        leads = [self.lead("https://a.example/", unread=False), self.lead("https://b.example/", minutes=5),
+                 self.lead("http://192.0.2.7/")]
+        self.assertEqual(self.run_once(leads, skip=("https://b.example/",)), (
+            ["https://b.example/", "https://a.example/"],  # unread first
+            ["http://192.0.2.7/", "https://a.example/"], 0))  # warning signs skip triage and go first
+        self.assertEqual(list(self.home.glob("report-*")), [])  # reports of clean checks are deleted
+        self.assertEqual(self.run_once(leads), ([], [], 0))
+        self.assertEqual(self.run_once(leads), ([], [], 0))
+        files = ac.ScheduleFiles.for_user()
+        state = ac.load_state(files)
+        self.assertEqual(sorted(x["outcome"] for x in state["seen"].values()), ["SAFE", "SAFE", "skipped"])
+        self.assertEqual(len(state["runs"]), 2)  # the same news twice is kept once
+        self.assertEqual(oct(files.state.stat().st_mode & 0o777), "0o600")
+
+    def test_checks_per_run_are_capped_and_the_rest_waits_without_a_second_triage(self) -> None:
+        leads = [self.lead(f"https://site{i}.example/", minutes=i) for i in range(ac.MAX_CHECKS + 3)]
+        self.assertEqual(len(self.run_once(leads)[1]), ac.MAX_CHECKS)
+        asked, checked, _ = self.run_once(leads)
+        self.assertEqual((asked, len(checked)), ([], 3))
+
+    def test_only_a_malicious_verdict_alerts(self) -> None:
+        self.assertEqual(self.run_once([self.lead("https://grey.example/")], verdict="SUSPICIOUS")[2], 0)
+        self.assertEqual(self.run_once([self.lead("https://evil.example/")], verdict="MALICIOUS")[2], 1)
+        findings = ac.load_state(ac.ScheduleFiles.for_user())["findings"]
+        self.assertEqual([f["verdict"] for f in findings], ["SUSPICIOUS", "MALICIOUS"])
+
+    def test_helper_app_is_kept_when_unchanged_and_off_removes_everything(self) -> None:
+        files = ac.ScheduleFiles.for_user()
+        self.assertTrue(ac.build_helper(files.helper, "exit 3"))
+        self.assertFalse(ac.build_helper(files.helper, "exit 3"))  # its Full Disk Access grant survives
+        info = plistlib.loads((files.helper / "Contents" / "Info.plist").read_bytes())
+        self.assertEqual((info["CFBundleIdentifier"], info["LSUIElement"]), (ac.SCHEDULE_LABEL, True))
+        self.assertIn("runtime", subprocess.run(["codesign", "-dv", str(files.helper)], capture_output=True,
+                                                text=True).stderr)  # no library injection into the helper
+        job = ac.agent_definition(files.helper)
+        # A failed run ends the app, instead of leaving an error dialog open that makes launchd skip later times.
+        self.assertEqual(subprocess.run(job["ProgramArguments"], timeout=30).returncode, 0)
+        # Launching it registered it with Launch Services, by its real path (/var is a link to /private/var).
+        self.addCleanup(subprocess.run, [ac.LSREGISTER, "-u", str(files.helper.resolve())])
+        ac.save_state(files, {"seen": {}})
+        files.agent.parent.mkdir(parents=True)
+        files.agent.write_bytes(plistlib.dumps(job))
+        with mock.patch.object(ac, "run", return_value=(0, "")) as run:  # launchctl, tccutil, lsregister: not for real
+            self.assertTrue(ac.schedule_off())
+            self.assertFalse(ac.schedule_off())
+        self.assertFalse(files.folder.exists() or files.agent.exists())
+        self.assertEqual([c.args[0][:2] for c in run.call_args_list],
+                         [["launchctl", "bootout"], ["tccutil", "reset"], [ac.LSREGISTER, "-u"]])
+
+
 class InstallerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="audit-content-test-"))
@@ -139,7 +266,8 @@ class InstallerTest(unittest.TestCase):
         for name, body in (("container", FAKE_CONTAINER), ("security", FAKE_SECURITY)):
             (self.fake / name).write_text(body)
             (self.fake / name).chmod(0o755)
-        for f in ("audit-content.py", "context_menu.py", "sandbox.py", "Containerfile"):
+        for f in ("audit-content.py", "context_menu.py", "telegram.py", "mail.py", "known-domains.txt", "sandbox.py",
+                  "Containerfile"):
             shutil.copy2(ROOT / f, self.src / f)
         self.home = self.tmp / "home"  # uninstall removes right-click entries: never the real ones
         self.env = {**os.environ, "PATH": f"{self.fake}:/usr/bin:/bin", "SOURCE_DIR": str(self.src),

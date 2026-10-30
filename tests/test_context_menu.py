@@ -231,7 +231,7 @@ class ContextMenuTest(unittest.TestCase):
         child = cm._child
         try:
             with self.assertRaises(SystemExit):
-                cm._stop(signal.SIGTERM, None)
+                cm.stop(signal.SIGTERM, None)
             self.assertEqual(child.wait(timeout=10), -signal.SIGTERM)
         finally:
             child.kill()
