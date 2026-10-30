@@ -4,23 +4,26 @@ Check a link or a file before you open it. audit-content opens it inside a throw
 
 It is made for people whose laptop is worth attacking, such as anyone with access to production systems, cloud accounts, company finances, or crypto wallets. Many breaches start with one click: a fake login page, a "verify you are human" page that quietly puts a command on your clipboard, or a "coding test" from a recruiter that runs code the moment you open the folder in your editor.
 
-## Install
+## Install or update
 
 ```sh
-python3 audit-content.py setup
-python3 audit-content.py auth
+curl -fsSL https://raw.githubusercontent.com/paoloanzn/audit-content/main/install.sh | sh
+audit-content setup
+audit-content auth
 ```
+
+The first line puts the program in `/usr/local/share/audit-content` and the `audit-content` command in `/usr/local/bin`, so it asks for your password once. Run it again to update; it tells you when the sandbox changed and the image needs `audit-content setup --rebuild`. Set `PREFIX=/custom/path` before `sh` to install somewhere else.
 
 You need a Mac with Apple silicon and macOS 26 or later, Claude Code with a Claude subscription, and Python 3.9 or later (the one that ships with macOS is fine; nothing else is installed). `setup` installs Apple's [container](https://github.com/apple/container) tool if it is missing, and only after checking that the download matches the published checksum and is signed and notarized by Apple. It then builds the sandbox image once, which takes about eight minutes and uses about 2.7 GB of disk. `auth` runs `claude setup-token` for you, checks the token with Claude, and keeps it in the macOS Keychain. The token never enters the sandbox.
 
 ## Use
 
 ```sh
-python3 audit-content.py https://example.com/invoice
-python3 audit-content.py --file ~/Downloads/offer-letter.zip --open
+audit-content https://example.com/invoice
+audit-content --file ~/Downloads/offer-letter.zip --open
 ```
 
-Pass a link, or a file with `--file` (an email attachment, an archive, a document, a saved web page). `--report` writes the safe-view report as a single HTML file in the temporary folder, `--open` also opens it in your browser, and `--json` prints the verdict for other tools. The exit code is 0 for SAFE, 1 for SUSPICIOUS, 2 for MALICIOUS, and 3 if the tool itself failed. `clean` removes leftovers of an interrupted check, and `uninstall` removes the image and the stored token.
+Pass a link, or a file with `--file` (an email attachment, an archive, a document, a saved web page). `--report` writes the safe-view report as a single HTML file in the temporary folder, `--open` also opens it in your browser, and `--json` prints the verdict for other tools. The exit code is 0 for SAFE, 1 for SUSPICIOUS, 2 for MALICIOUS, and 3 if the tool itself failed. `clean` removes leftovers of an interrupted check, and `uninstall` removes the image, the stored token, the program, and the `audit-content` command.
 
 ![Terminal output of a check](docs/terminal.png)
 
@@ -68,7 +71,7 @@ With `--upstream-proxy`, the same checks run first, and the proxy then asks the 
 
 Because the analysts only ever hold a fake token, a page that tries to trick an analyst can at worst skew that analyst's opinion; it cannot steal your access, and it cannot remove the hard evidence. Everything that comes back from the machine is treated as hostile: text is cleaned before it reaches your terminal, and images are checked before they go into the report.
 
-Nothing is left behind. The machine is deleted when the check ends, its data lives only in memory, and its network is removed. If audit-content itself is killed, the machine notices and stops within a second, and the next check sweeps up anything left over. The only thing that stays on disk is the image. `setup --rebuild` refreshes it and the malware signatures inside it, deletes the old copy, and removes the build cache, so disk use does not grow over time.
+Nothing is left behind. The machine is deleted when the check ends, its data lives only in memory, and its network is removed. If audit-content itself is killed, the machine notices and stops within a second, and the next check sweeps up anything left over. Apart from the program's three files, the only thing that stays on disk is the image. `setup --rebuild` refreshes it and the malware signatures inside it, deletes the old copy, and removes the build cache, so disk use does not grow over time.
 
 A few limits are worth knowing. The sandbox visits the link from your network, so the sender can see that it was opened, and one-time links such as password resets may get used up. `--upstream-proxy http://host:port` sends the traffic through another exit instead. Some phishing kits hide from automated visitors, so SAFE means nothing was found, not that the content is proven harmless. Malware signatures are as fresh as the last rebuild.
 
@@ -78,6 +81,8 @@ A few limits are worth knowing. The sandbox visits the link from your network, s
 uvx --from 'mypy==1.15.0' mypy --strict --python-version 3.9 audit-content.py
 uvx mypy --strict --python-version 3.13 sandbox.py
 container build -t audit-content-sandbox:latest -f Containerfile .
+sh -n install.sh
+SOURCE_DIR=. sh install.sh
 ```
 
-`audit-content.py` runs on your Mac: the command line, the proxy, the virtual machine's life cycle, the verdict, and the report. `sandbox.py` runs inside the machine: the firewall, the browser, the scanners, and the analysts. `Containerfile` describes the image. Both Python files use only the standard library and pass strict type checking. Planned work is tracked in the milestones: Linux and Windows versions, and an optional background mode that checks new messages a few times a day.
+In a checkout, `python3 audit-content.py` works exactly like the installed command, and `SOURCE_DIR=. sh install.sh` installs the checkout instead of downloading. `audit-content.py` runs on your Mac: the command line, the proxy, the virtual machine's life cycle, the verdict, and the report. `sandbox.py` runs inside the machine: the firewall, the browser, the scanners, and the analysts. `Containerfile` describes the image. Both Python files use only the standard library and pass strict type checking. Planned work is tracked in the milestones: Linux and Windows versions, and an optional background mode that checks new messages a few times a day.

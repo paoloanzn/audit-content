@@ -11,7 +11,7 @@
       --upstream-proxy URL          Send the sandbox's internet traffic through this HTTP proxy.
       --timeout SECONDS             Total time budget (default 120).
   audit-content clean               Remove leftovers of interrupted checks.
-  audit-content uninstall           Remove the image, leftovers, and the Keychain token.
+  audit-content uninstall           Remove the image, leftovers, the Keychain token, and the installed command.
 
 Exit codes: 0 SAFE, 1 SUSPICIOUS or INCOMPLETE, 2 MALICIOUS, 3 tool error.
 
@@ -1308,11 +1308,26 @@ def cmd_clean() -> int:
 
 
 def cmd_uninstall() -> int:
-    ensure_runtime()
-    sweep(force=True)
-    run(["container", "image", "delete", IMAGE], timeout=60)
+    version = container_version() if shutil.which("container") else None
+    if version is not None and version >= MIN_CONTAINER:
+        ensure_runtime()
+        sweep(force=True)
+        run(["container", "image", "delete", IMAGE], timeout=60)
     run(["security", "delete-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", KEYCHAIN_SERVICE])
-    print("Removed the image, leftovers, and the Keychain token. Delete this folder to finish.")
+    print("Removed the image, leftovers, and the Keychain token.")
+    marker = HERE / ".install-link"  # written by install.sh; a git checkout has none
+    if not marker.is_file() or HERE.name != "audit-content":
+        print("Delete this folder to finish.")
+        return 0
+    link = Path(marker.read_text().strip())
+    ours = link.is_symlink() and link.resolve() == Path(__file__).resolve()
+    rm = ["rm", "-rf", "--", str(HERE)] + ([str(link)] if ours else [])
+    if not (os.access(HERE.parent, os.W_OK) and (not ours or os.access(link.parent, os.W_OK))):
+        log(f"removing {HERE}{f' and {link}' if ours else ''} (needs administrator rights)")
+        rm.insert(0, "sudo")
+    if subprocess.call(rm) != 0:
+        die(f"could not remove {HERE}")
+    print(f"Removed {HERE}{f' and the command {link}' if ours else ''}.")
     return 0
 
 
