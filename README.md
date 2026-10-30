@@ -1,146 +1,61 @@
 # audit-content
 
-Check a link or a file **before** you open it. audit-content opens it inside a throwaway microVM on your
-Mac, lets four AI analysts and a set of classic scanners take it apart, and gives you a verdict in
-about one to two minutes: **SAFE**, **SUSPICIOUS**, or **MALICIOUS**.
+Check a link or a file before you open it. audit-content opens it inside a throwaway virtual machine on your Mac, lets four AI analysts and a set of classic malware scanners pick it apart, and gives you a verdict in one to two minutes: SAFE, SUSPICIOUS, or MALICIOUS. If you want, it also gives you a safe view of the content: pictures of the page, its text, and documents turned into plain images, so you can see what is there without ever opening it yourself.
 
-It is built for people whose laptop is worth attacking: anyone with production, cloud, finance, or
-wallet access. One click on a lure is often all an attacker needs (a fake login page, a "verify you
-are human" page that puts a command on your clipboard, a "coding test" repository that runs code
-when you open it in your editor).
-
-## Requirements
-
-- A Mac with Apple silicon, macOS 26 or later.
-- Claude Code installed, and a Claude subscription. Checks run `claude -p` inside the VM on your plan.
-- Python 3.9 or later. The `/usr/bin/python3` that ships with macOS works. No packages are needed.
-
-Apple [`container`](https://github.com/apple/container) is installed by `setup` if it is missing or
-older than 1.6.
+It is made for people whose laptop is worth attacking, such as anyone with access to production systems, cloud accounts, company finances, or crypto wallets. Many breaches start with one click: a fake login page, a "verify you are human" page that quietly puts a command on your clipboard, or a "coding test" from a recruiter that runs code the moment you open the folder in your editor.
 
 ## Install
 
 ```sh
-python3 audit-content.py setup        # installs Apple container if needed, builds the image (5-10 min, ~2.7 GB)
-python3 audit-content.py auth         # runs `claude setup-token` for you; approve in the browser
+python3 audit-content.py setup
+python3 audit-content.py auth
 ```
 
-`setup` downloads the latest signed installer from the apple/container GitHub release. Before
-installing anything, it checks three things, and installs with `sudo installer` (macOS asks for your
-password) only if all three pass:
-
-1. The SHA-256 matches the one GitHub publishes for that release.
-2. The package is signed with Apple's Developer ID for the Containerization team (`UPBK2H6LZM`).
-3. Gatekeeper accepts it as notarized.
-
-The package is downloaded to a temporary folder that is deleted afterwards. If `container` is
-already installed but older, `setup` upgrades it. Upgrading stops the container service, so `setup`
-asks first when containers are running. Checks start the service themselves if it is stopped, for
-example after a reboot.
-
-`auth` reads the token straight from `claude setup-token`'s output, even when it wraps over several
-lines, and checks it with Claude before storing it in the macOS Keychain. If you already have a
-token, copy it and run `pbpaste | python3 audit-content.py auth`.
-
-Optional: `alias audit-content="python3 /path/to/audit-content.py"`.
+You need a Mac with Apple silicon and macOS 26 or later, Claude Code with a Claude subscription, and Python 3.9 or later (the one that ships with macOS is fine; nothing else is installed). `setup` installs Apple's [container](https://github.com/apple/container) tool if it is missing, and only after checking that the download matches the published checksum and is signed and notarized by Apple. It then builds the sandbox image once, which takes about eight minutes and uses about 2.7 GB of disk. `auth` runs `claude setup-token` for you, checks the token with Claude, and keeps it in the macOS Keychain. The token never enters the sandbox.
 
 ## Use
 
 ```sh
-audit-content https://example.com/invoice           # check a link
-audit-content --file ~/Downloads/offer-letter.zip   # check an attachment, archive, document, or HTML file
-audit-content https://... --open                    # also open the safe-view report
-audit-content https://... --json                    # machine-readable verdict on stdout
+python3 audit-content.py https://example.com/invoice
+python3 audit-content.py --file ~/Downloads/offer-letter.zip --open
 ```
 
-| Flag | Meaning |
-| --- | --- |
-| `--report` | Write one self-contained HTML report to the system temp folder (macOS removes it after 3 days unused). |
-| `--open` | Write the report and open it in your browser. |
-| `--json` | Print the verdict as JSON. Progress stays on stderr. |
-| `--upstream-proxy http://host:port` | Send the sandbox's internet traffic through a company or VPN proxy. |
-| `--timeout 120` | Total time budget in seconds. |
+Pass a link, or a file with `--file` (an email attachment, an archive, a document, a saved web page). `--report` writes the safe-view report as a single HTML file in the temporary folder, `--open` also opens it in your browser, and `--json` prints the verdict for other tools. The exit code is 0 for SAFE, 1 for SUSPICIOUS, 2 for MALICIOUS, and 3 if the tool itself failed. `clean` removes leftovers of an interrupted check, and `uninstall` removes the image and the stored token.
 
-Exit codes: `0` SAFE, `1` SUSPICIOUS or INCOMPLETE, `2` MALICIOUS, `3` tool error.
+![Terminal output of a check](docs/terminal.png)
 
-The report is the **safe view**: screenshots of the page (pixels only), the page text with defanged
-links, every network connection, what the page tried to do (clipboard, wallet, dialogs, downloads,
-where the fake credentials went), every file with hashes and scanner hits, and documents
-flattened to page images. It has a strict Content-Security-Policy and contains no scripts, so it
-cannot run anything from the checked page.
+## The report
 
-Other commands: `audit-content clean` removes leftovers of interrupted checks, and `audit-content uninstall`
-removes the image, the leftovers, and the Keychain token. Apple `container` itself stays installed. To remove it too, run
-`sudo /usr/local/bin/uninstall-container.sh -d` (`-d` also deletes its data, `-k` keeps it).
+The report starts with the verdict and the reasons behind it. Hard evidence comes first: findings from fixed checks that no AI can talk away, such as a page writing a command to your clipboard or sending a typed password to a Telegram bot. After that comes one plain sentence from each AI analyst.
 
-## What happens during a check
+![Top of the report: verdict, hard evidence, and the analysts' conclusions](docs/report-summary.png)
 
-1. **A fresh microVM starts** (about 1 s). It has its own Linux kernel, a read-only root filesystem,
-   RAM-only scratch space, and a new host-only network that reaches nothing but audit-content's proxy.
-2. **Capture** (about 5-30 s). Chromium opens the link with a realistic desktop profile (your
-   timezone and language). It scrolls, fills login forms with fake *canary* credentials, and clicks
-   up to three buttons such as "Verify", "Download", or "Connect wallet" to reveal hidden stages.
-   Instrumentation records every request and response body, redirects, downloads, dialogs,
-   permission prompts, clipboard writes, and wallet signature requests (through a fake wallet that
-   refuses to sign anything).
-3. **Triage** (about 5 s). Archives are unpacked (passwords found on the page are tried). Code-hosting
-   links are cloned. Every file gets a hash and a type. ClamAV and YARA-Forge scan everything.
-   Auto-run traps are flagged: VS Code / Cursor `tasks.json` with `runOn: folderOpen`, npm install
-   scripts, double extensions, right-to-left-override names. Domain age, DNS, and certificate
-   history are fetched.
-4. **Analysis** (about 30-70 s). Four `claude -p` specialists run in parallel, each on one area: web
-   phishing, scripts and active behaviour, files and repositories, and infrastructure.
-5. **Verdict.** The result is the worst of the deterministic indicators and the four specialists.
-   Hard evidence (an antivirus hit, a ClickFix clipboard command, credentials sent to Telegram, a
-   drainer signature request, an auto-run task) can never be talked down by an AI. If anything
-   fails or times out, the result is at least SUSPICIOUS.
+Further down you see what the page looked like at each step, and what it tried to do while the sandbox was poking at it. The pictures are only pixels, so nothing in the report can run or be clicked. The report also lists every network connection, every file with its fingerprint and scanner results, the page text with all links made unclickable, and a list of addresses to hand to your security team.
 
-## Security model
+![What the page looks like and what it tried to do](docs/report-pages.png)
 
-- **Isolation.** Every check runs in its own Apple Virtualization.framework VM. Inside it, Chromium
-  keeps its own sandbox and runs as an unprivileged user without capabilities (`no_new_privs`).
-- **Egress.** The VM's network is host-only. The only way out is audit-content's proxy on the host. The
-  proxy resolves DNS itself and refuses loopback, private, link-local, CGNAT, multicast, and
-  metadata addresses, so a page cannot reach your intranet, your router, or this Mac. Inside the
-  VM, nftables also limits traffic to the three proxy ports before anything untrusted runs. Mail
-  ports are blocked.
-- **Credentials.** The VM only ever holds a placeholder token. The proxy injects your real OAuth
-  token on the LLM route, behind a per-run secret path. A prompt-injected agent can at worst lie
-  about its own verdict. It cannot steal the token.
-- **Untrusted output.** Everything that comes back from the VM is treated as hostile. Text is
-  stripped of terminal control characters, and bidi tricks are made visible. Images are re-encoded
-  only if they really are JPEGs.
+## How a check works
 
-## Disk and resources
+Every check starts a fresh virtual machine with its own Linux system, a read-only disk, and memory-only scratch space. Its network can reach nothing except a small proxy that audit-content runs on your Mac. That proxy is the only way out, and it refuses any address on your home or office network, on the Mac itself, or in cloud metadata services, so a page cannot reach anything private.
 
-- The image (about 2.7 GB) is the only lasting artifact. `setup --rebuild` replaces it, and deleting
-  the old image also garbage-collects its unpacked snapshot, so disk use does not grow.
-- A check writes nothing to disk. The VM runs with `--rm` and a read-only root, and all its data
-  lives in VM RAM. The per-run network is deleted.
-- Nothing keeps running. The VM has a hard deadline, and it also stops within a second if
-  audit-content itself is killed (dead-man switch on its stdin). Leftovers from a hard crash are swept
-  by the next check or by `audit-content clean`.
-- A check uses up to 4 CPUs and 6 GB of RAM while it runs.
+Inside the machine, a real Chrome browser opens the link the way a normal visitor would, using your time zone and language. It scrolls, fills login forms with fake "canary" credentials to see where they get sent, and presses up to three buttons such as "Verify", "Download", or "Connect wallet" to reveal what hides behind them. It records every request, download, dialog, permission prompt, clipboard write, and wallet signature request. The fake wallet never signs anything. Archives are unpacked, code repositories are cloned, and everything is scanned with ClamAV and YARA rules. The checks also look for the tricks used in fake job interviews, like editor tasks that run when a folder opens and install scripts that fetch code from the internet. Domain age, DNS, and certificate history are looked up too.
 
-## Limits
+Four Claude analysts then work in parallel, each on one area: phishing and fake pages, scripts and page behaviour, files and code repositories, and domains and hosting. They can dig further with tools inside the machine, but they never run the content they inspect. The final verdict is the worst of everything found. If any analyst fails or runs out of time, the result is at least SUSPICIOUS, never SAFE.
 
-- The sandbox visits the link from your network. The sender can see that the link was opened, and
-  a one-time link (password reset, magic login) may now be used up. Use `--upstream-proxy` to exit
-  elsewhere.
-- Phishing kits can still cloak against automated visitors. A SAFE verdict means "nothing found",
-  not "proven harmless".
-- Signatures (ClamAV, YARA-Forge) are as fresh as the last `audit-content setup --rebuild`.
-- If the guest itself were fully compromised (Chromium exploit plus sandbox escape), it could forge
-  its own report. The proxy-side observations and the VM boundary still hold in that case.
+## Safety and disk
 
-## Development
+The analysts only ever hold a fake token. The proxy swaps in your real one on the way to Claude, so a page that tries to trick an analyst can at worst skew that analyst's opinion; it cannot steal your access, and it cannot remove the hard evidence. Everything that comes back from the machine is treated as hostile: text is cleaned before it reaches your terminal, and images are checked before they go into the report.
+
+Nothing is left behind. The machine is deleted when the check ends, its data lives only in memory, and its network is removed. If audit-content itself is killed, the machine notices and stops within a second, and the next check sweeps up anything left over. The only thing that stays on disk is the image. `setup --rebuild` refreshes it and the malware signatures inside it, deletes the old copy, and removes the build cache, so disk use does not grow over time.
+
+A few limits are worth knowing. The sandbox visits the link from your network, so the sender can see that it was opened, and one-time links such as password resets may get used up. `--upstream-proxy http://host:port` sends the traffic through another exit instead. Some phishing kits hide from automated visitors, so SAFE means nothing was found, not that the content is proven harmless. Malware signatures are as fresh as the last rebuild.
+
+## Develop
 
 ```sh
-uvx --from 'mypy==1.15.0' mypy --strict --python-version 3.9 audit-content.py   # host: macOS python3
-uvx mypy --strict --python-version 3.13 sandbox.py                          # guest: Debian trixie
-container build -t audit-content-sandbox:latest -f Containerfile .              # quick rebuild with cache
+uvx --from 'mypy==1.15.0' mypy --strict --python-version 3.9 audit-content.py
+uvx mypy --strict --python-version 3.13 sandbox.py
+container build -t audit-content-sandbox:latest -f Containerfile .
 ```
 
-Files: `audit-content.py` (host: CLI, proxy, VM lifecycle, verdict, report), `sandbox.py` (guest:
-firewall and privilege drop, Chromium over the DevTools pipe, triage, specialists), and
-`Containerfile` (the image).
+`audit-content.py` runs on your Mac: the command line, the proxy, the virtual machine's life cycle, the verdict, and the report. `sandbox.py` runs inside the machine: the firewall, the browser, the scanners, and the analysts. `Containerfile` describes the image. Both Python files use only the standard library and pass strict type checking. Planned work is tracked in the milestones: Linux and Windows versions, and an optional background mode that checks new messages a few times a day.
