@@ -31,7 +31,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/mypy"
           "$RUNNER_TEMP/mypy/bin/pip" install --quiet mypy==1.15.0
-          "$RUNNER_TEMP/mypy/bin/mypy" --strict --python-version 3.9 audit-content.py tests/test_host.py
+          "$RUNNER_TEMP/mypy/bin/mypy" --strict --python-version 3.9 audit-content.py telegram.py tests/test_host.py tests/test_telegram.py
           "$RUNNER_TEMP/mypy/bin/mypy" --strict --python-version 3.13 sandbox.py
 
       - name: Installer syntax
