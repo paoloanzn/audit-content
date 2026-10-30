@@ -31,7 +31,7 @@ Pass a link, or a file with `--file` (an email attachment, an archive, a documen
 
 ### From the right-click menu
 
-You can also check a link or a file right where you found it, without a terminal. To check a link, select it in any app, such as Chrome, Safari, Mail or Notes, right-click it, and choose Check Link with audit-content. The entry appears only when the selection contains a link, and apps that offer many services, like Chrome, list it under Services.
+You can also check a link or a file right where you found it, without a terminal. To check a link, select it in any app, such as Chrome, Safari, Mail or Notes, right-click it, and choose Check Link with audit-content. Apps that offer many services, like Chrome, list it under Services. Links written so they cannot be clicked, such as `hxxps://evil[.]com`, work too. One exception: in Chrome, right-clicking a link on a web page opens Chrome's own link menu, which has no Services even when the link's text is selected. For those, choose Copy Link Address, paste the link into the address bar without pressing Return, then select it there and right-click.
 
 ![Checking a link from the right-click menu in Chrome](docs/context-menu-link.png)
 

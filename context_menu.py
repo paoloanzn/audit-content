@@ -4,8 +4,7 @@
 What it adds
   Two macOS services for the current user, in ~/Library/Services, which the right-click menu
   lists directly or, when an app offers many services, under Services:
-    "Check Link with audit-content"  when selected text contains a link, in any app (Chrome, Safari,
-                                     Mail, Notes...)
+    "Check Link with audit-content"  for selected text, in any app (Chrome, Safari, Mail, Notes...)
     "Check File with audit-content"  for files in Finder
   Choosing one runs the check in the background. macOS shows its spinning gear in the menu bar
   meanwhile (click it to stop the check), and the verdict appears in a native alert whose button
@@ -69,8 +68,11 @@ class Entry:
 
 
 ENTRIES = (
+    # Shown for any selected text. macOS could limit it to text where its link detector finds a link
+    # (NSTextContent: URL), but that detector misses the links most worth checking: unusual domain
+    # endings without "https://" (as Chrome's address bar shows them), defanged and lookalike links.
     Entry("link", "Check Link with audit-content", "com.apple.Automator.text",
-          {"NSSendTypes": ["public.utf8-plain-text"], "NSRequiredContext": {"NSTextContent": "URL"}}, 0),
+          {"NSSendTypes": ["public.utf8-plain-text"]}, 0),
     # Files only (public.data): audit-content checks files, not folders.
     Entry("file", "Check File with audit-content", "com.apple.Automator.fileSystemObject",
           {"NSSendFileTypes": ["public.data"],
@@ -205,6 +207,9 @@ def _uuid() -> str:
 
 TRAILING = ".,;:!?"
 DOMAIN = re.compile(r"[^\s@/]+\.[A-Za-z]{2,}(?:[/?#]\S*)?")
+# How security teams write links that must not be clickable, and what they stand for.
+DEFANGED = ((re.compile(r"^hxxp(s?)(?=\[?:)", re.I), r"http\1"), (re.compile(r"\[:\]|\(:\)"), ":"),
+            (re.compile(r"\[\.\]|\(\.\)|\{\.\}|\[dot\]", re.I), "."))
 
 
 @dataclass(frozen=True)
@@ -220,11 +225,13 @@ class Outcome:
 def links_in(text: str) -> List[str]:
     """What to check in a selection: all of it when it is one word, else the words that are links.
 
-    macOS offers the entry only when it detects a link in the selection, but the selection may hold
-    a sentence around it. Domains without a scheme count when no full link is there.
+    The selection may hold a sentence around a link. Domains without a scheme count when no full
+    link is there, and defanged links (hxxp://evil[.]example) are restored.
     """
     words: List[str] = []
     for word in text.split():
+        for pattern, replacement in DEFANGED:
+            word = pattern.sub(replacement, word)
         word = word.strip("<>\"'`“”‘’«»").rstrip(TRAILING).lstrip("(")
         while word.endswith(")") and word.count(")") > word.count("("):  # the sentence's bracket, not the link's
             word = word[:-1].rstrip(TRAILING)

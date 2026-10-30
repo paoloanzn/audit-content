@@ -106,8 +106,8 @@ class ContextMenuTest(unittest.TestCase):
                                                      "Check File with audit-content.workflow"])
         self.assertEqual(self.refreshes, 1)
         link, file = (self.read(b, "Info.plist")["NSServices"][0] for b in bundles)
-        self.assertEqual((link["NSMessage"], link["NSSendTypes"], link["NSRequiredContext"]),
-                         ("runWorkflowAsService", ["public.utf8-plain-text"], {"NSTextContent": "URL"}))
+        self.assertEqual((link["NSMessage"], link["NSSendTypes"]), ("runWorkflowAsService", ["public.utf8-plain-text"]))
+        self.assertNotIn("NSRequiredContext", link)  # macOS's link detector would hide it for links it misses
         self.assertEqual((file["NSSendFileTypes"], file["NSRequiredContext"]),
                          (["public.data"], {"NSApplicationIdentifier": "com.apple.finder"}))
         for bundle, kind, method in zip(bundles, ("link", "file"), (0, 1)):
@@ -163,6 +163,12 @@ class ContextMenuTest(unittest.TestCase):
                          ["https://en.wikipedia.org/wiki/X_(y)", "www.b.example"])
         self.assertEqual(cm.links_in("visit evil.example today, mail me@ok.example"), ["evil.example"])
         self.assertEqual(cm.links_in("no links here at all"), [])
+        # Chrome's address bar shows links without "https://", and macOS does not see these as links.
+        self.assertEqual(cm.links_in("bankr.bot/discover/0x67A7CA081Dc79B45fD1FA059Cd3b8dCcA779Aba3"),
+                         ["bankr.bot/discover/0x67A7CA081Dc79B45fD1FA059Cd3b8dCcA779Aba3"])
+        self.assertEqual(cm.links_in("Blocked: hxxps://evil[.]example/login and hXXp[:]//bad(.)example"),
+                         ["https://evil.example/login", "http://bad.example"])
+        self.assertEqual(cm.links_in("evil[dot]example"), ["evil.example"])
         many = " ".join(f"https://{i}.example" for i in range(9)) + " https://0.example"
         self.assertEqual(cm.links_in(many), [f"https://{i}.example" for i in range(cm.MAX_TARGETS)])
 
