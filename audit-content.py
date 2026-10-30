@@ -1311,8 +1311,8 @@ def add_menu() -> None:
     except context_menu.MenuError as e:
         log(f"the right-click entries were not added: {e}")
         return
-    print("Right-click menu: select a link and choose Services > Check Link with audit-content, or right-click a file "
-          "in Finder and choose Quick Actions > Check File with audit-content.")
+    print("Right-click menu: right-click a selected link and choose Check Link with audit-content, or a file in Finder "
+          "and choose Check File with audit-content (under Services when the menu groups them).")
 
 
 def cmd_clean() -> int:

@@ -2,10 +2,11 @@
 """Right-click entries for audit-content: check a link or a file from the menu where you found it.
 
 What it adds
-  Two macOS services for the current user, in ~/Library/Services:
+  Two macOS services for the current user, in ~/Library/Services, which the right-click menu
+  lists directly or, when an app offers many services, under Services:
     "Check Link with audit-content"  when selected text contains a link, in any app (Chrome, Safari,
-                                     Mail, Notes...): right-click > Services.
-    "Check File with audit-content"  for files in Finder: right-click > Quick Actions.
+                                     Mail, Notes...)
+    "Check File with audit-content"  for files in Finder
   Choosing one runs the check in the background. macOS shows its spinning gear in the menu bar
   meanwhile (click it to stop the check), and the verdict appears in a native alert whose button
   opens the safe-view report.
@@ -259,7 +260,7 @@ def run_check(args: List[str], label: str) -> Outcome:
         return Outcome("", label, (), None, 3, last)
     reasons = tuple(str(r.get("title", "")) for r in data.get("reasons") or [] if isinstance(r, dict))
     report = data.get("report")
-    return Outcome(str(data["verdict"]), str(data.get("target") or label), reasons,
+    return Outcome(str(data["verdict"]), label, reasons,  # what was right-clicked, not a long path
                    Path(report) if isinstance(report, str) and report else None, code)
 
 
@@ -364,13 +365,14 @@ def main(argv: Sequence[str]) -> int:
     c.add_argument("paths", nargs="*", help="the files, for `file`; a `link` selection is read from standard input")
     a = p.parse_args(argv)
     if a.cmd == "check":
+        # The alerts report every outcome. The exit status stays 0, because Automator shows its own
+        # "Run Shell Script encountered an error" dialog for any other, even after a clean verdict.
         try:
             selection = sys.stdin.buffer.read(MAX_SELECTION).decode("utf-8", "replace") if a.kind == "link" else ""
-            items = [selection] if a.kind == "link" else list(a.paths)
-            return check(a.kind, items)
+            check(a.kind, [selection] if a.kind == "link" else list(a.paths))
         except Exception as e:  # the entries have no other way to report: never fail silently
             alert("audit-content could not run the check", printable(f"{type(e).__name__}: {e}", 1000), STOP)
-            return 3
+        return 0
     try:
         for bundle in install() if a.cmd == "install" else remove():
             print(f"{a.cmd}: {bundle}")

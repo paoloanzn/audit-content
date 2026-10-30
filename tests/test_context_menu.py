@@ -186,6 +186,16 @@ class ContextMenuTest(unittest.TestCase):
         run.assert_called_once_with(["/usr/bin/open", str(self.report)], timeout=30)
         self.assertTrue(self.report.exists())
 
+    def test_the_entry_exits_cleanly_whatever_the_verdict(self) -> None:
+        # Automator shows an error dialog of its own for any other exit status.
+        with mock.patch.object(cm, "alert", Recorder()), \
+                mock.patch.object(sys, "stdin", mock.Mock(buffer=mock.Mock(read=lambda n: b"https://x.example"))):
+            self.assertEqual(cm.main(["check", "link"]), 0)
+            os.environ["FAKE_MODE"] = "fail"
+            self.assertEqual(cm.main(["check", "link"]), 0)
+            self.assertEqual(cm.main(["check", "file", "/tmp/a.pdf"]), 0)
+        self.assertEqual(len(self.calls()), 3)
+
     def test_files_are_passed_so_that_no_name_reads_as_an_option(self) -> None:
         with mock.patch.object(cm, "alert", Recorder()):
             cm.check("file", ["/tmp/-rf", "/tmp/offer letter.pdf"])
@@ -202,7 +212,7 @@ class ContextMenuTest(unittest.TestCase):
             self.assertEqual(cm.check("link", ["nothing to see"]), 1)
             with mock.patch.object(cm, "check", side_effect=RuntimeError("boom")), \
                     mock.patch.object(sys, "stdin", mock.Mock(buffer=mock.Mock(read=lambda n: b"x"))):
-                self.assertEqual(cm.main(["check", "link"]), 3)
+                self.assertEqual(cm.main(["check", "link"]), 0)  # shown in the alert, not as an exit status
         self.assertEqual([(h, m, lvl) for h, m, lvl, _, _ in shown.calls], [
             ("audit-content could not check https://x.example",
              "the sandbox image is missing; run `audit-content setup`", cm.STOP),
