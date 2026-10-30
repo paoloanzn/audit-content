@@ -70,21 +70,8 @@ With `--upstream-proxy`, the same checks run first, and the proxy then asks the 
 
 ## Safety and disk
 
-Because the analysts only ever hold a fake token, a page that tries to trick an analyst can at worst skew that analyst's opinion; it cannot steal your access, and it cannot remove the hard evidence. Everything that comes back from the machine is treated as hostile: text is cleaned before it reaches your terminal, and images are checked before they go into the report.
+Everything that comes back from the virtual machine is treated as hostile. Text is cleaned before it reaches your terminal, and images are checked before they go into the report.
 
-Nothing is left behind. The machine is deleted when the check ends, its data lives only in memory, and its network is removed. If audit-content itself is killed, the machine notices and stops within a second, and the next check sweeps up anything left over. Apart from the program's three files, the only thing that stays on disk is the image. `setup --rebuild` refreshes it and the malware signatures inside it, deletes the old copy, and removes the build cache, so disk use does not grow over time.
+Nothing is left behind. Each check's machine, memory, and network are deleted when it ends, even if audit-content is killed. The only thing that stays on disk is the image, and rebuilding it replaces the old one instead of adding to it.
 
-A few limits are worth knowing. The sandbox visits the link from your network, so the sender can see that it was opened, and one-time links such as password resets may get used up. `--upstream-proxy http://host:port` sends the traffic through another exit instead. Some phishing kits hide from automated visitors, so SAFE means nothing was found, not that the content is proven harmless. Malware signatures are as fresh as the last rebuild.
-
-## Develop
-
-```sh
-uvx --from 'mypy==1.15.0' mypy --strict --python-version 3.9 audit-content.py tests/test_host.py
-uvx --from 'mypy==1.15.0' mypy --strict --python-version 3.13 sandbox.py
-/usr/bin/python3 -m unittest discover -s tests -v
-sh -n install.sh
-container build -t audit-content-sandbox:latest -f Containerfile .
-SOURCE_DIR=. sh install.sh
-```
-
-In a checkout, `python3 audit-content.py` works exactly like the installed command, and `SOURCE_DIR=. sh install.sh` installs the checkout instead of downloading. The tests cover the proxy rules, the verdict rules, link parsing, and install, update, and uninstall. They need no virtual machine, token, or internet, and the install tests use stand-ins for `container` and `security`, so they never touch your real image or Keychain. CI runs the type checks and the tests on a macOS arm64 runner for every pull request and every push to `main`. `audit-content.py` runs on your Mac: the command line, the proxy, the virtual machine's life cycle, the verdict, and the report. `sandbox.py` runs inside the machine: the firewall, the browser, the scanners, and the analysts. `Containerfile` describes the image. Both Python files use only the standard library and pass strict type checking. Planned work is tracked in the milestones: Linux and Windows versions, and an optional background mode that checks new messages a few times a day.
+The sandbox opens links from your own internet connection, so the site sees your address. To keep it hidden, pass a proxy you trust with `--upstream-proxy http://host:port`.
