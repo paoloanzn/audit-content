@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+    paths-ignore: ["**.md", "docs/**"]
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: Host checks (macOS arm64)
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Runner
+        run: |
+          echo "macOS $(sw_vers -productVersion) $(uname -m), $(/usr/bin/python3 --version)"
+          echo "Hypervisor support: $(sysctl -n kern.hv_support)"
+
+      - name: Type checks
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mypy"
+          "$RUNNER_TEMP/mypy/bin/pip" install --quiet mypy==1.15.0
+          "$RUNNER_TEMP/mypy/bin/mypy" --strict --python-version 3.9 audit-content.py tests/test_host.py
+          "$RUNNER_TEMP/mypy/bin/mypy" --strict --python-version 3.13 sandbox.py
+
+      - name: Installer syntax
+        run: sh -n install.sh
+
+      # The oldest Python the host script supports, and the one every Mac ships.
+      - name: Tests
+        run: /usr/bin/python3 -m unittest discover -s tests -v

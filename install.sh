@@ -77,7 +77,8 @@ main() {
   if ! writable "$PREFIX/share" || ! writable "$PREFIX/bin"; then
     echo "Installing into $PREFIX needs administrator rights."
     SUDO="sudo"
-    sudo -v
+    # Not `sudo -v`: it asks for a password even when the sudoers rules let commands run without one.
+    sudo true || fail "could not get administrator rights"
   fi
 
   STAGE="$PREFIX/share/.audit-content.new.$$"

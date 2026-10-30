@@ -78,11 +78,12 @@ A few limits are worth knowing. The sandbox visits the link from your network, s
 ## Develop
 
 ```sh
-uvx --from 'mypy==1.15.0' mypy --strict --python-version 3.9 audit-content.py
-uvx mypy --strict --python-version 3.13 sandbox.py
-container build -t audit-content-sandbox:latest -f Containerfile .
+uvx --from 'mypy==1.15.0' mypy --strict --python-version 3.9 audit-content.py tests/test_host.py
+uvx --from 'mypy==1.15.0' mypy --strict --python-version 3.13 sandbox.py
+/usr/bin/python3 -m unittest discover -s tests -v
 sh -n install.sh
+container build -t audit-content-sandbox:latest -f Containerfile .
 SOURCE_DIR=. sh install.sh
 ```
 
-In a checkout, `python3 audit-content.py` works exactly like the installed command, and `SOURCE_DIR=. sh install.sh` installs the checkout instead of downloading. `audit-content.py` runs on your Mac: the command line, the proxy, the virtual machine's life cycle, the verdict, and the report. `sandbox.py` runs inside the machine: the firewall, the browser, the scanners, and the analysts. `Containerfile` describes the image. Both Python files use only the standard library and pass strict type checking. Planned work is tracked in the milestones: Linux and Windows versions, and an optional background mode that checks new messages a few times a day.
+In a checkout, `python3 audit-content.py` works exactly like the installed command, and `SOURCE_DIR=. sh install.sh` installs the checkout instead of downloading. The tests cover the proxy rules, the verdict rules, link parsing, and install, update, and uninstall. They need no virtual machine, token, or internet, and the install tests use stand-ins for `container` and `security`, so they never touch your real image or Keychain. CI runs the type checks and the tests on a macOS arm64 runner for every pull request and every push to `main`. `audit-content.py` runs on your Mac: the command line, the proxy, the virtual machine's life cycle, the verdict, and the report. `sandbox.py` runs inside the machine: the firewall, the browser, the scanners, and the analysts. `Containerfile` describes the image. Both Python files use only the standard library and pass strict type checking. Planned work is tracked in the milestones: Linux and Windows versions, and an optional background mode that checks new messages a few times a day.
