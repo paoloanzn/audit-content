@@ -1230,11 +1230,13 @@ def builder_cache_ids() -> Optional[List[str]]:
 def drop_build_cache(keep: List[str]) -> None:
     """Delete the cache records this build added (records the builder already had stay), then TRIM the
     builder's disk so macOS gets the space back: without TRIM the VM's disk file would not shrink."""
-    new = sorted(set(builder_cache_ids() or []) - set(keep))
-    prune = "".join(f'buildctl prune --filter "id=={i}" >/dev/null 2>&1; ' for i in new)
-    # Twice: a parent record becomes prunable only after its children are gone.
-    run(["container", "exec", "buildkit", "sh", "-c", f"{prune}{prune}sync; fstrim / >/dev/null 2>&1; true"],
-        timeout=600)
+    for _ in range(5):  # parent records (e.g. the pulled base image) become prunable only after their children
+        new = sorted(set(builder_cache_ids() or []) - set(keep))
+        if not new:
+            break
+        prune = "".join(f'buildctl prune --filter "id=={i}" >/dev/null 2>&1; ' for i in new)
+        run(["container", "exec", "buildkit", "sh", "-c", prune], timeout=600)
+    run(["container", "exec", "buildkit", "sh", "-c", "sync; fstrim / >/dev/null 2>&1; true"], timeout=600)
 
 
 def image_id() -> Optional[str]:
