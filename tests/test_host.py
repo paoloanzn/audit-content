@@ -139,9 +139,11 @@ class InstallerTest(unittest.TestCase):
         for name, body in (("container", FAKE_CONTAINER), ("security", FAKE_SECURITY)):
             (self.fake / name).write_text(body)
             (self.fake / name).chmod(0o755)
-        for f in ("audit-content.py", "sandbox.py", "Containerfile"):
+        for f in ("audit-content.py", "context_menu.py", "sandbox.py", "Containerfile"):
             shutil.copy2(ROOT / f, self.src / f)
-        self.env = {**os.environ, "PATH": f"{self.fake}:/usr/bin:/bin", "SOURCE_DIR": str(self.src)}
+        self.home = self.tmp / "home"  # uninstall removes right-click entries: never the real ones
+        self.env = {**os.environ, "PATH": f"{self.fake}:/usr/bin:/bin", "SOURCE_DIR": str(self.src),
+                    "HOME": str(self.home)}
 
     def tearDown(self) -> None:
         if passwordless_sudo():
@@ -170,10 +172,16 @@ class InstallerTest(unittest.TestCase):
         self.assertIn("The sandbox changed", self.install(prefix))
         self.assertEqual(sorted(os.listdir(prefix / "share")), ["audit-content"])  # no staging leftovers
 
+        p = subprocess.run([sys.executable, str(app / "context_menu.py"), "install"], env=self.env,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        services = self.home / "Library" / "Services"
+        self.assertEqual(len(list(services.glob("*.workflow"))), 2)
         p = subprocess.run([str(link), "uninstall"], env=self.env, capture_output=True, text=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertFalse(os.path.lexists(link))
         self.assertFalse(app.exists())
+        self.assertEqual(list(services.iterdir()), [])
         calls = (self.fake / "calls.log").read_text()
         self.assertIn(f"container image delete {ac.IMAGE}", calls)
         self.assertIn(f"security delete-generic-password -a {ac.KEYCHAIN_ACCOUNT}", calls)

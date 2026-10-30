@@ -14,7 +14,7 @@ audit-content auth
 
 The program is installed in `/usr/local/share/audit-content` by default, you can set `PREFIX=/custom/path` before `sh` to install somewhere else. Run it again to update the tool; it tells you when the sandbox changed and the image needs `audit-content setup --rebuild`. 
 
-You need a Mac with Apple silicon and macOS 26 or later, Claude Code with a Claude subscription, and Python 3.9 or later (the one that ships with macOS is fine; nothing else is installed). `setup` installs Apple's [container](https://github.com/apple/container) tool if it is missing, and only after checking that the download matches the published checksum and is signed and notarized by Apple. It then builds the sandbox image once, which takes about eight minutes and uses about 2.7 GB of disk. `auth` runs `claude setup-token` for you, checks the token with Claude, and keeps it in the macOS Keychain. The token never enters the sandbox.
+You need a Mac with Apple silicon and macOS 26 or later, Claude Code with a Claude subscription, and Python 3.9 or later (the one that ships with macOS is fine; nothing else is installed). `setup` installs Apple's [container](https://github.com/apple/container) tool if it is missing, and only after checking that the download matches the published checksum and is signed and notarized by Apple. It then builds the sandbox image once, which takes about eight minutes and uses about 2.7 GB of disk, and adds the right-click entries described below. `auth` runs `claude setup-token` for you, checks the token with Claude, and keeps it in the macOS Keychain. The token never enters the sandbox.
 
 ## Use
 
@@ -23,9 +23,11 @@ audit-content https://example.com/invoice
 audit-content --file ~/Downloads/offer-letter.zip --open
 ```
 
-Pass a link, or a file with `--file` (an email attachment, an archive, a document, a saved web page). `--report` writes the safe-view report as a single HTML file in the temporary folder, `--open` also opens it in your browser, and `--json` prints the verdict for other tools. The exit code is 0 for SAFE, 1 for SUSPICIOUS, 2 for MALICIOUS, and 3 if the tool itself failed. `clean` removes leftovers of an interrupted check, and `uninstall` removes the image, the stored token, the program, and the `audit-content` command.
+Pass a link, or a file with `--file` (an email attachment, an archive, a document, a saved web page). `--report` writes the safe-view report as a single HTML file in the temporary folder, `--open` also opens it in your browser, and `--json` prints the verdict for other tools. The exit code is 0 for SAFE, 1 for SUSPICIOUS, 2 for MALICIOUS, and 3 if the tool itself failed. `clean` removes leftovers of an interrupted check, and `uninstall` removes the image, the stored token, the right-click entries, the program, and the `audit-content` command.
 
 ![Terminal output of a check](docs/terminal.png)
+
+You can also check something right where you found it, without a terminal. Select a link in any app, such as Chrome, Safari, Mail or Notes, right-click it, and choose Services > Check Link with audit-content. Or right-click a file in Finder and choose Quick Actions > Check File with audit-content. The check runs in the background while macOS shows a spinning gear in the menu bar, which you can click to stop it. The verdict then appears in a window, with a button that opens the report.
 
 ## The report
 

@@ -61,7 +61,7 @@ main() {
     src=""
     for candidate in "$TEMPORARY"/*/; do src="${candidate%/}"; break; done
   fi
-  for f in audit-content.py sandbox.py Containerfile; do
+  for f in audit-content.py context_menu.py sandbox.py Containerfile; do
     [ -f "$src/$f" ] || fail "missing $f in $src"
   done
 
@@ -86,7 +86,7 @@ main() {
   $SUDO mkdir -p "$PREFIX/share" "$PREFIX/bin"
   $SUDO install -d -m 755 "$STAGE"
   $SUDO install -m 755 "$src/audit-content.py" "$STAGE/audit-content.py"
-  $SUDO install -m 644 "$src/sandbox.py" "$src/Containerfile" "$STAGE/"
+  $SUDO install -m 644 "$src/context_menu.py" "$src/sandbox.py" "$src/Containerfile" "$STAGE/"
   # Tells `audit-content uninstall` which command link to remove along with this folder.
   printf '%s\n' "$LINK" | $SUDO tee "$STAGE/.install-link" >/dev/null
 
