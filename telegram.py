@@ -582,7 +582,8 @@ def _in_range(rec: List[Value], lower: Optional[bytes], upper: Optional[bytes]) 
 # Postbox objects: Telegram's key-value encoding, with type tags named after Swift classes
 # --------------------------------------------------------------------------------------------
 
-# Only used to name type tags in results and errors; unknown tags still decode.
+# Only used to name type tags in results and errors; unknown tags still decode. The message
+# attributes and media come from Telegram's declareEncodable lists (AccountManager.swift).
 KNOWN_TYPES = (
     "TelegramUser", "TelegramGroup", "TelegramChannel", "TelegramSecretChat",
     "TelegramMediaFile", "TelegramMediaImage", "TelegramMediaWebpage", "TelegramMediaAction",
@@ -598,6 +599,26 @@ KNOWN_TYPES = (
     "AuthorSignatureMessageAttribute", "InlineBotMessageAttribute", "AutoremoveTimeoutMessageAttribute",
     "AutoclearTimeoutMessageAttribute", "ConsumableContentMessageAttribute", "ReactionsMessageAttribute",
     "OutgoingMessageInfoAttribute", "WebpagePreviewMessageAttribute", "AuthorizedAccountState",
+    "TelegramMediaGiveawayResults", "TelegramMediaLiveStream", "TelegramMediaTodo", "TelegramMediaWebFile",
+    "AudioTranscriptionMessageAttribute", "AuthSessionInfoAttribute", "BoostCountMessageAttribute",
+    "ChannelMessageStateVersionAttribute", "ConsumablePersonalMentionMessageAttribute",
+    "ContentRequiresValidationMessageAttribute", "DerivedDataMessageAttribute", "EffectMessageAttribute",
+    "EmbeddedMediaStickersMessageAttribute", "EmojiSearchQueryMessageAttribute",
+    "EphemeralMessageAttribute", "EphemeralOutgoingMessageAttribute",
+    "EphemeralReplacementMessageAttribute", "FactCheckMessageAttribute", "ForwardCountMessageAttribute",
+    "ForwardOptionsMessageAttribute", "ForwardVideoTimestampAttribute", "GuestChatMessageAttribute",
+    "InlineBusinessBotMessageAttribute", "InvertMediaMessageAttribute", "MediaSpoilerMessageAttribute",
+    "NonPremiumMessageAttribute", "NotificationInfoMessageAttribute",
+    "OutgoingChatContextResultMessageAttribute", "OutgoingContentInfoMessageAttribute",
+    "OutgoingQuickReplyMessageAttribute", "OutgoingScheduleInfoMessageAttribute",
+    "PaidStarsMessageAttribute", "ParticipantRankMessageAttribute", "PeerGroupMessageStateVersionAttribute",
+    "PendingProcessingMessageAttribute", "PendingReactionsMessageAttribute",
+    "PendingStarsReactionsMessageAttribute", "PendingWalletTransferMessageAttribute",
+    "PublishedSuggestedPostMessageAttribute", "QuotedReplyMessageAttribute", "ReplyStoryAttribute",
+    "ReplyThreadMessageAttribute", "ReportDeliveryMessageAttribute", "RestrictedContentMessageAttribute",
+    "RichTextMessageAttribute", "ScheduledRepeatAttribute", "SendAsMessageAttribute",
+    "SourceAuthorInfoMessageAttribute", "SuggestedPostMessageAttribute", "SummarizationMessageAttribute",
+    "TelegramMediaWebpageAttribute", "TranslationMessageAttribute", "ValidationMessageAttribute",
 )
 TYPE_NAMES = {murmur3_32(name.encode()): name for name in KNOWN_TYPES}
 
@@ -766,9 +787,11 @@ def decode_root(buf: bytes) -> Obj:
 
 # Postbox table numbers (Postbox.swift); checked against the schema when a session opens.
 T_METADATA, T_PEERS, T_MEDIA, T_MESSAGES, T_READ_STATE = "t0", "t2", "t6", "t7", "t14"
+T_TOPICS = "t73"  # forum topics with their own read state (MessageHistoryThreadIndexTable)
 STATE_KEY = 2  # metadata entry with the logged-in account (AuthorizedAccountState)
 
 INCOMING = 4  # MessageFlags
+CHANNEL_FORUM = 1 << 11  # TelegramChannelFlags
 UNSENT, FAILED = 1, 2
 CLOUD_NAMESPACE = 0
 URL_RE = re.compile(r"(?i)\b(?:https?|tg|ton)://[^\s<>\"'`​]+")
@@ -791,6 +814,7 @@ class Chat:
     title: str
     username: Optional[str] = None
     phone: Optional[str] = None
+    forum: bool = False  # a group split into topics, each with its own read state
 
     @property
     def telegram_id(self) -> int:
@@ -887,6 +911,9 @@ def parse_message(key: bytes, value: bytes) -> Optional[RawMessage]:
     m.embedded_media = [decode_root(r.blob()) for _ in range(r.count())]
     for _ in range(r.count()):
         m.media_ids.append((r.i32(), r.i64()))
+    if not r.done():  # saved-message tags, absent from records written by older versions
+        for _ in range(r.count()):
+            r.blob()
     if not r.done():
         raise FormatError("message record has trailing bytes")
     return m
@@ -898,7 +925,8 @@ def chat_from_peer(peer_id: int, o: Obj) -> Chat:
         kind = "bot" if o.fields.get("bi") is not None else "user"
         return Chat(peer_id, kind, name, o.string("un"), o.string("p"))
     if o.type == "TelegramChannel":
-        return Chat(peer_id, "channel", o.string("t") or "", o.string("un"))
+        return Chat(peer_id, "channel", o.string("t") or "", o.string("un"),
+                    forum=bool((o.integer("fl") or 0) & CHANNEL_FORUM))
     if o.type == "TelegramGroup":
         return Chat(peer_id, "group", o.string("t") or "")
     if o.type == "TelegramSecretChat":
@@ -961,7 +989,14 @@ def attachment_from_media(media_dir: Path, o: Obj) -> Optional[Attachment]:
 @dataclass(frozen=True)
 class ReadState:
     max_incoming_read_id: int
-    marked_unread: bool
+    max_incoming_read_date: Optional[int]  # set when reading is tracked by date, as in secret chats
+    unread_count: int  # what Telegram shows; the read mark can lag behind it, as in channels only previewed
+
+    def passed(self, timestamp: int, mid: int) -> bool:
+        """Whether a message lies past the read mark."""
+        if self.max_incoming_read_date is not None:
+            return (timestamp, mid) > (self.max_incoming_read_date, self.max_incoming_read_id)
+        return mid > self.max_incoming_read_id
 
 
 def parse_read_states(value: bytes) -> Dict[int, ReadState]:
@@ -970,18 +1005,30 @@ def parse_read_states(value: bytes) -> Dict[int, ReadState]:
     out: Dict[int, ReadState] = {}
     for _ in range(r.count()):
         namespace, kind = r.i32(), r.u8()
-        if kind == 0:  # id based
-            max_incoming, _max_outgoing, _max_known, _count, marked = r.i32(), r.i32(), r.i32(), r.i32(), r.u8()
-            out[namespace] = ReadState(max_incoming, marked != 0)
-        elif kind == 1:  # index based (secret chats)
-            r.take(4 + 8 + 4 + 4 + 4)  # max incoming index
-            _count, marked = r.i32(), r.u8()
-            out[namespace] = ReadState(-1, marked != 0)
-        else:
-            raise FormatError(f"unknown read state kind {kind}")
+        if kind == 0:  # by message id
+            max_incoming = r.i32()
+            r.take(8)  # max outgoing read id, max known id
+            out[namespace] = ReadState(max_incoming, None, r.i32())
+        else:  # by message index: date, peer, namespace, id
+            date = r.i32()
+            r.take(12)
+            max_incoming = r.i32()
+            r.take(20)  # max outgoing read index
+            out[namespace] = ReadState(max_incoming, date, r.i32())
+        r.take(4)  # flags
     if not r.done():
         raise FormatError("read state has trailing bytes")
     return out
+
+
+def parse_topic(value: bytes) -> Optional[ReadState]:
+    """MessageHistoryThreadIndexTable: a forum topic's read state, kept in its encoded thread data."""
+    data = decode_object(value, 0).fields.get("d")
+    if not isinstance(data, bytes) or not data:
+        return None
+    topic = decode_root(data)
+    mark, count = topic.integer("maxIncomingReadId"), topic.integer("incomingUnreadCount")
+    return None if mark is None or count is None else ReadState(mark, None, count)
 
 
 # --------------------------------------------------------------------------------------------
@@ -1100,8 +1147,10 @@ def find_accounts(folder: Path, depth: int = 3) -> List[Account]:
         children = sorted(p for p in folder.iterdir() if p.is_dir() and not p.is_symlink())
     except PermissionError as e:
         raise AccessDenied(denied_message(folder)) from e
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return found
+    except OSError as e:  # never mistake a read error for "no account here"
+        raise TelegramError(f"cannot read {folder}: {e}") from e
     key_file = folder / ".tempkeyEncrypted"
     for child in children:
         if ACCOUNT_DIR.fullmatch(child.name):
@@ -1171,6 +1220,7 @@ class Session:
             self.messages_table = self.tree.table(T_MESSAGES)
             self.media_table = self.tree.tables.get(T_MEDIA)
             self.read_table = self.tree.tables.get(T_READ_STATE)
+            self.topics_table = self.tree.tables.get(T_TOPICS)
             if self.messages_table.layout == "rowid" or self.peers.layout != "rowid":
                 raise FormatError("Telegram's tables have an unexpected layout; this Telegram version is not supported")
         except BaseException:
@@ -1179,7 +1229,9 @@ class Session:
         self.skipped = 0
         self._chats: Optional[Dict[int, Chat]] = None
         self._media: Dict[Tuple[int, int], Optional[Obj]] = {}
-        self._read: Dict[int, Optional[Dict[int, ReadState]]] = {}
+        self._read: Dict[int, Dict[int, ReadState]] = {}
+        self._topics: Dict[int, Dict[int, ReadState]] = {}
+        self._oldest_unread: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {}
 
     def __enter__(self) -> Session:
         return self
@@ -1191,6 +1243,8 @@ class Session:
         self.db.close()
         self._media.clear()
         self._read.clear()
+        self._topics.clear()
+        self._oldest_unread.clear()
 
     # -- who and where
 
@@ -1323,17 +1377,67 @@ class Session:
         return o
 
     def _unread(self, raw: RawMessage) -> Optional[bool]:
-        if raw.chat_id not in self._read:
-            value = self.tree.get(self.read_table, raw.chat_id) if self.read_table else None
-            try:
-                self._read[raw.chat_id] = parse_read_states(value) if value else None
-            except TelegramError:
-                self._read[raw.chat_id] = None
-        states = self._read[raw.chat_id]
-        state = states.get(raw.namespace) if states else None
-        if state is None or state.max_incoming_read_id < 0:
+        """Whether Telegram shows this incoming message as unread; None when it keeps no read state for it."""
+        chat = self.chats().get(raw.chat_id)
+        if chat is not None and chat.forum:
+            topic = self._topic_states(raw.chat_id).get(raw.thread_id) if raw.thread_id is not None else None
+            return None if topic is None else topic.unread_count > 0 and topic.passed(raw.timestamp, raw.id)
+        state = self._read_states(raw.chat_id).get(raw.namespace)
+        if state is None:
             return None
-        return raw.id > state.max_incoming_read_id or state.marked_unread
+        key = (raw.chat_id, raw.namespace)
+        if key not in self._oldest_unread:
+            self._oldest_unread[key] = self._find_oldest_unread(raw.chat_id, raw.namespace, state)
+        oldest = self._oldest_unread[key]
+        return oldest is not None and (raw.timestamp, raw.id) >= oldest
+
+    def _find_oldest_unread(self, peer: int, ns: int, state: ReadState) -> Optional[Tuple[int, int]]:
+        # Telegram counts as unread the newest incoming messages past the read mark, as many as its
+        # stored count; that keeps a lagging mark from turning a whole channel unread.
+        oldest: Optional[Tuple[int, int]] = None
+        found = 0
+        upper = struct.pack(">qi", peer, ns + 1)
+        for key, value in self.tree.items(self.messages_table, struct.pack(">qi", peer, ns), upper, reverse=True):
+            if found >= state.unread_count:
+                break
+            assert isinstance(key, bytes)
+            try:
+                raw = parse_message(key, value)
+            except TelegramError:
+                continue
+            if raw is None:
+                continue
+            if not state.passed(raw.timestamp, raw.id):
+                break
+            if raw.flags & INCOMING:
+                oldest, found = (raw.timestamp, raw.id), found + 1
+        return oldest
+
+    def _read_states(self, chat_id: int) -> Dict[int, ReadState]:
+        if chat_id not in self._read:
+            value = self.tree.get(self.read_table, chat_id) if self.read_table else None
+            try:
+                self._read[chat_id] = parse_read_states(value) if value else {}
+            except TelegramError:
+                self._read[chat_id] = {}
+        return self._read[chat_id]
+
+    def _topic_states(self, chat_id: int) -> Dict[int, ReadState]:
+        if chat_id not in self._topics:
+            topics: Dict[int, ReadState] = {}
+            if self.topics_table is not None and self.topics_table.layout != "rowid":
+                # Keys: peer, date of the topic's last message, topic id, then that message's namespace and id.
+                lower = struct.pack(">q", chat_id)
+                upper = struct.pack(">q", chat_id + 1) if chat_id < 0x7FFFFFFFFFFFFFFF else None
+                for key, value in self.tree.items(self.topics_table, lower, upper):
+                    try:
+                        state = parse_topic(value)
+                    except TelegramError:
+                        continue
+                    if state is not None and isinstance(key, bytes) and len(key) == 28:
+                        topics[struct.unpack_from(">q", key, 12)[0]] = state
+            self._topics[chat_id] = topics
+        return self._topics[chat_id]
 
 
 # --------------------------------------------------------------------------------------------

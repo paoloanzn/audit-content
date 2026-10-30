@@ -75,7 +75,8 @@ def root(o: bytes) -> bytes:
 
 def message(text: str, *, incoming: bool = True, author: Optional[int] = None, attributes: Sequence[bytes] = (),
             embedded: Sequence[bytes] = (), media: Sequence[Tuple[int, int]] = (), thread: Optional[int] = None,
-            forward: Optional[int] = None, unique: Optional[int] = None) -> bytes:
+            forward: Optional[int] = None, unique: Optional[int] = None,
+            tags: Optional[Sequence[bytes]] = ()) -> bytes:
     flags = (1 if unique is not None else 0) | (32 if thread is not None else 0)
     v = b"\x00" + struct.pack("<II", 1, 1) + bytes([flags])
     v += struct.pack("<q", unique) if unique is not None else b""
@@ -87,7 +88,10 @@ def message(text: str, *, incoming: bool = True, author: Optional[int] = None, a
     v += struct.pack("<i", len(data)) + data
     for group in (attributes, embedded):
         v += struct.pack("<i", len(group)) + b"".join(struct.pack("<i", len(a)) + a for a in group)
-    return v + struct.pack("<i", len(media)) + b"".join(struct.pack("<iq", ns, mid) for ns, mid in media)
+    v += struct.pack("<i", len(media)) + b"".join(struct.pack("<iq", ns, mid) for ns, mid in media)
+    if tags is None:  # records written before saved-message tags existed
+        return v
+    return v + struct.pack("<i", len(tags)) + b"".join(struct.pack("<i", len(t)) + t for t in tags)
 
 
 def mkey(peer: int, ns: int, ts: int, mid: int) -> bytes:
@@ -161,7 +165,8 @@ class Fixture:
             c.execute(f"CREATE TABLE {name} (key INTEGER PRIMARY KEY, value BLOB)")
         for name in ("t6", "t7"):
             c.execute(f"CREATE TABLE {name} (key BLOB PRIMARY KEY, value BLOB)")
-        c.execute("CREATE TABLE t4 (key BLOB PRIMARY KEY, value BLOB) WITHOUT ROWID")
+        for name in ("t4", "t73"):
+            c.execute(f"CREATE TABLE {name} (key BLOB PRIMARY KEY, value BLOB) WITHOUT ROWID")
         c.execute("INSERT INTO t0 VALUES (?, ?)", (tg.STATE_KEY, root(obj("AuthorizedAccountState", i64("peerId", ME)))))
         peers = [
             (ME, obj("TelegramUser", i64("i", ME), s("fn", "Me"))),
@@ -169,11 +174,20 @@ class Fixture:
                         s("p", "+100"))),
             (BIG, obj("TelegramUser", i64("i", BIG), s("fn", "Big"))),
             (BOT, obj("TelegramUser", i64("i", BOT), s("fn", "Helper"), child("bi", obj("BotUserInfo", i32("f", 0))))),
-            (NEWS, obj("TelegramChannel", i64("i", NEWS), s("t", "News"), s("un", "news"))),
+            (NEWS, obj("TelegramChannel", i64("i", NEWS), s("t", "News"), s("un", "news"),
+                       i32("fl", tg.CHANNEL_FORUM))),
         ]
         c.executemany("INSERT INTO t2 VALUES (?, ?)", [(p, root(o)) for p, o in peers])
-        # Alice has read nothing after message 5 in the cloud namespace.
-        c.execute("INSERT INTO t14 VALUES (?, ?)", (ALICE, struct.pack("<iiBiiiiB", 1, 0, 0, 5, 3, 9, 4, 0)))
+        # Alice's cloud messages are read by id up to 5, yet Telegram counts only one unread; her local
+        # ones are read by date, as in secret chats. Big's read mark lags, but nothing counts as unread.
+        by_id = struct.pack("<iBiiiii", 0, 0, 5, 3, 9, 1, 1)
+        by_date = struct.pack("<iBiqiiiqiiii", 1, 1, T0 + 8, ALICE, 1, 0, T0, ALICE, 1, 0, 1, 0)
+        c.execute("INSERT INTO t14 VALUES (?, ?)", (ALICE, struct.pack("<i", 2) + by_id + by_date))
+        c.execute("INSERT INTO t14 VALUES (?, ?)", (BIG, struct.pack("<iiBiiiii", 1, 0, 0, 0, 0, 1, 0, 0)))
+        # News is a forum: topic 1 has been read up to post 2597.
+        topic = root(obj("MessageHistoryThreadData", i32("maxIncomingReadId", 2597), i32("incomingUnreadCount", 2)))
+        c.execute("INSERT INTO t73 VALUES (?, ?)", (struct.pack(">qiqii", NEWS, T0 + 2598, 1, 0, 2598),
+                                                    fld("d", 10, struct.pack("<i", len(topic)) + topic)))
         doc = obj("TelegramMediaFile", s("mt", "application/pdf"), i32("s", 2048),
                   child("r", obj("CloudDocumentMediaResource", i32("d", 4), i64("f", 99))),
                   children("at", [obj("TelegramMediaFileAttribute", i32("t", 0), s("fn", "invoice.pdf"))]))
@@ -197,16 +211,17 @@ class Fixture:
             (mkey(ALICE, 0, T0 + 2, 2), message("Here 😀 go evil.example/login?a=1 now", author=ALICE,
                                                 attributes=[hidden])),
             (mkey(ALICE, 0, T0 + 3, 3), message("the invoice", author=ALICE, media=[(0, 7)])),
-            (mkey(ALICE, 0, T0 + 4, 4), message("sure", incoming=False, author=ME)),
+            (mkey(ALICE, 0, T0 + 4, 4), message("sure", incoming=False, author=ME, tags=[b"\x01tag"])),
             (mkey(ALICE, 0, T0 + 5, 5), message("see https://plain.example/x.", author=ALICE, embedded=[webpage])),
             (mkey(ALICE, 0, T0 + 6, 6), message("x" * 20000, author=ALICE, forward=NEWS, thread=77)),
             (mkey(ALICE, 0, T0 + 7, 7), b"\x00garbage"),  # cannot be decoded: skipped and counted
-            (mkey(ALICE, 1, T0 + 8, 1), message("local note", author=ALICE)),
+            (mkey(ALICE, 1, T0 + 8, 1), message("local note", author=ALICE, tags=None)),
             (mkey(BOT, 0, T0 + 9, 1), message("click", author=BOT, attributes=[root(obj(
                 "ReplyMarkupMessageAttribute", children("r", [obj("ReplyMarkupRow", children("b", [obj(
                     "ReplyMarkupButton", s("t", "Open"), child("a", obj("#url", s("u", "https://button.example"))))]))])))])),
         ]
-        rows += [(mkey(NEWS, 0, T0 + 100 + i, 100 + i), message(f"post {i} " + "y" * (i % 700), author=NEWS))
+        rows += [(mkey(NEWS, 0, T0 + 100 + i, 100 + i), message(f"post {i} " + "y" * (i % 700), author=NEWS,
+                                                                thread=None if i % 2 else 1))
                  for i in range(2500)]
         c.executemany("INSERT INTO t7 VALUES (?, ?)", rows)
         self.messages.update(rows)
@@ -298,6 +313,7 @@ class TelegramTest(unittest.TestCase):
             self.assertEqual((chats[ALICE].kind, chats[ALICE].title, chats[ALICE].username, chats[ALICE].phone),
                              ("user", "Alice Smith", "alice", "+100"))
             self.assertEqual((chats[BOT].kind, chats[NEWS].kind, chats[NEWS].title), ("bot", "channel", "News"))
+            self.assertEqual((chats[NEWS].forum, chats[ALICE].forum), (True, False))
             self.assertEqual(chats[BIG].telegram_id, BIG_ID)
             self.assertEqual(chats[NEWS].telegram_id, 1234)
             self.assertEqual(s.chat_ids_with_messages(), sorted([ALICE, BIG, BOT, NEWS]))
@@ -315,12 +331,16 @@ class TelegramTest(unittest.TestCase):
             self.assertEqual(len(msgs[(0, 6)].text), 20000)
             self.assertEqual((msgs[(0, 6)].forwarded_from, msgs[(0, 6)].thread_id), (NEWS, 77))
             self.assertEqual(msgs[(0, 8)].text, "fresh from the log")
-            self.assertEqual([msgs[(0, i)].unread for i in (1, 4, 5, 6, 8)], [False, False, False, True, True])
-            self.assertIsNone(msgs[(1, 1)].unread)
+            self.assertEqual([msgs[(0, i)].unread for i in (1, 4, 5, 6, 8)], [False, False, False, False, True])
+            self.assertTrue(msgs[(1, 1)].unread)
             self.assertFalse(msgs[(0, 4)].incoming)
             self.assertEqual(msgs[(0, 1)].date, datetime.fromtimestamp(T0 + 1, timezone.utc))
             bot = next(s.messages(BOT))
             self.assertEqual(bot.links, ("https://button.example",))
+            self.assertIsNone(bot.unread)
+            self.assertFalse(next(s.messages(BIG)).unread)
+            posts = {m.id: m.unread for m in s.messages(NEWS, since=datetime.fromtimestamp(T0 + 2596, timezone.utc))}
+            self.assertEqual(posts, {2596: False, 2597: None, 2598: True, 2599: None})
 
     def test_messages_across_chats_by_date(self) -> None:
         with self.session() as s:
