@@ -56,6 +56,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Dict, List, Optional, Tuple, cast
 
+sys.dont_write_bytecode = True  # importing the module below must not leave a __pycache__ next to the program
+import context_menu  # noqa: E402  (the right-click entries that setup adds)
+
 IMAGE = "audit-content-sandbox:latest"
 PREFIX = "audit-content-"
 HERE = Path(__file__).resolve().parent
@@ -1253,6 +1256,7 @@ def cmd_setup(rebuild: bool) -> int:
     ensure_runtime(install=True)
     if image_exists() and not rebuild:
         print(f"{IMAGE} is ready. Use `audit-content setup --rebuild` to refresh tools and signatures.")
+        add_menu()
         return 0
     for f in ("Containerfile", "sandbox.py"):
         if not (HERE / f).is_file():
@@ -1297,7 +1301,18 @@ def cmd_setup(rebuild: bool) -> int:
     if old_id and new_id and old_id != new_id:
         run(["container", "image", "delete", old_id], timeout=60)  # also garbage-collects its unpacked snapshot
     print(f"\n{IMAGE} built. Next: `audit-content auth` (once), then `audit-content <url>`.")
+    add_menu()
     return 0
+
+
+def add_menu() -> None:
+    try:
+        context_menu.install()
+    except context_menu.MenuError as e:
+        log(f"the right-click entries were not added: {e}")
+        return
+    print("Right-click menu: select a link and choose Services > Check Link with audit-content, or right-click a file "
+          "in Finder and choose Quick Actions > Check File with audit-content.")
 
 
 def cmd_clean() -> int:
@@ -1314,7 +1329,11 @@ def cmd_uninstall() -> int:
         sweep(force=True)
         run(["container", "image", "delete", IMAGE], timeout=60)
     run(["security", "delete-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", KEYCHAIN_SERVICE])
-    print("Removed the image, leftovers, and the Keychain token.")
+    try:
+        context_menu.remove()
+    except context_menu.MenuError as e:
+        log(f"could not remove the right-click entries: {e}")
+    print("Removed the image, leftovers, the Keychain token, and the right-click entries.")
     marker = HERE / ".install-link"  # written by install.sh; a git checkout has none
     if not marker.is_file() or HERE.name != "audit-content":
         print("Delete this folder to finish.")
