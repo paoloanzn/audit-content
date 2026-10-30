@@ -18,6 +18,8 @@ You need a Mac with Apple silicon and macOS 26 or later, Claude Code with a Clau
 
 ## Use
 
+### From the terminal
+
 ```sh
 audit-content https://example.com/invoice
 audit-content --file ~/Downloads/offer-letter.zip --open
@@ -27,7 +29,19 @@ Pass a link, or a file with `--file` (an email attachment, an archive, a documen
 
 ![Terminal output of a check](docs/terminal.png)
 
-You can also check something right where you found it, without a terminal. Select a link in any app, such as Chrome, Safari, Mail or Notes, right-click it, and choose Services > Check Link with audit-content. Or right-click a file in Finder and choose Quick Actions > Check File with audit-content. The check runs in the background while macOS shows a spinning gear in the menu bar, which you can click to stop it. The verdict then appears in a window, with a button that opens the report.
+### From the right-click menu
+
+You can also check a link or a file right where you found it, without a terminal. To check a link, select it in any app, such as Chrome, Safari, Mail or Notes, right-click it, and choose Check Link with audit-content. The entry appears only when the selection contains a link, and apps that offer many services, like Chrome, list it under Services.
+
+![Checking a link from the right-click menu in Chrome](docs/context-menu-link.png)
+
+To check a file, right-click it in Finder and choose Check File with audit-content.
+
+![Checking a file from the right-click menu in Finder](docs/context-menu-file.png)
+
+The check runs in the background while macOS shows a spinning gear in the menu bar, which you can click to stop it. The verdict then appears in a window, with a button that opens the report. Below, the file was the EICAR test file, which is harmless but built so that every antivirus flags it.
+
+<img src="docs/verdict-alert.png" width="372" alt="The verdict window for the EICAR test file: MALICIOUS">
 
 ## The report
 
